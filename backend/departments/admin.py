@@ -1,6 +1,5 @@
 
 from django.contrib import admin
-
 from .models import Department
 
 
@@ -14,10 +13,7 @@ class DepartmentAdmin(admin.ModelAdmin):
         "created_at",
     )
 
-    list_filter = (
-        "is_active",
-        "created_at",
-    )
+    list_filter = ("is_active", "created_at")
 
     search_fields = (
         "name",
@@ -29,13 +25,9 @@ class DepartmentAdmin(admin.ModelAdmin):
     )
 
     list_select_related = ("leader",)
-
     ordering = ("name",)
 
-    readonly_fields = (
-        "created_at",
-        "updated_at",
-    )
+    readonly_fields = ("created_at", "updated_at")
 
     fieldsets = (
         (
@@ -51,17 +43,12 @@ class DepartmentAdmin(admin.ModelAdmin):
         ),
         (
             "Department Leadership",
-            {
-                "fields": ("leader",)
-            },
+            {"fields": ("leader",)},
         ),
         (
             "Record Information",
             {
-                "fields": (
-                    "created_at",
-                    "updated_at",
-                ),
+                "fields": ("created_at", "updated_at"),
                 "classes": ("collapse",),
             },
         ),
