@@ -1,11 +1,17 @@
 
 import calendar
+import os
+import zipfile
 from datetime import timedelta
+from io import BytesIO
+
+from PIL import Image, UnidentifiedImageError
 
 from django.db import transaction
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -15,6 +21,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from departments.models import Department
+
 from .models import Activity, ActivityAttachment, ReportSubmission
 from .serializers import (
     ActivitySerializer,
@@ -23,20 +31,91 @@ from .serializers import (
 )
 
 
+MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+
+ALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".pdf", ".docx"
+}
+
+
+def is_admin(user):
+    return user.is_authenticated and (
+        user.is_superuser or user.role == "ADMIN"
+    )
+
+
+def is_secretary(user):
+    return user.is_authenticated and user.role == "SECRETARY"
+
+
+def is_department_leader(user):
+    return user.is_authenticated and user.role == "DEPARTMENT_LEADER"
+
+
 def user_department(user):
     return user.led_departments.filter(is_active=True).first()
 
 
-def is_admin(user):
-    return user.role == "ADMIN"
+def validate_uploaded_file(uploaded_file):
+    """Validate attachment size, extension and basic file structure."""
 
+    if uploaded_file.size > MAX_ATTACHMENT_SIZE:
+        raise ValidationError({
+            "file": "Maximum file size is 10 MB."
+        })
 
-def is_secretary(user):
-    return user.role == "SECRETARY"
+    extension = os.path.splitext(uploaded_file.name)[1].lower()
 
+    if extension not in ALLOWED_EXTENSIONS:
+        raise ValidationError({
+            "file": "Only JPG, JPEG, PNG, WEBP, PDF and DOCX files are allowed."
+        })
 
-def is_department_leader(user):
-    return user.role == "DEPARTMENT_LEADER"
+    uploaded_file.seek(0)
+    content = uploaded_file.read()
+    uploaded_file.seek(0)
+
+    if extension in {".jpg", ".jpeg", ".png", ".webp"}:
+        try:
+            image = Image.open(BytesIO(content))
+            image.verify()
+
+            expected_formats = {
+                ".jpg": {"JPEG"},
+                ".jpeg": {"JPEG"},
+                ".png": {"PNG"},
+                ".webp": {"WEBP"},
+            }
+
+            if image.format not in expected_formats[extension]:
+                raise ValidationError({
+                    "file": "The image content does not match its file extension."
+                })
+
+        except (UnidentifiedImageError, OSError):
+            raise ValidationError({
+                "file": "The uploaded image is invalid or corrupted."
+            })
+
+    elif extension == ".pdf":
+        if not content.startswith(b"%PDF-"):
+            raise ValidationError({
+                "file": "The uploaded PDF file is invalid."
+            })
+
+    elif extension == ".docx":
+        try:
+            with zipfile.ZipFile(BytesIO(content)) as archive:
+                if "word/document.xml" not in archive.namelist():
+                    raise ValidationError({
+                        "file": "The uploaded DOCX document is invalid."
+                    })
+        except zipfile.BadZipFile:
+            raise ValidationError({
+                "file": "The uploaded DOCX document is invalid."
+            })
+
+    uploaded_file.seek(0)
 
 
 class ActivityViewSet(viewsets.ModelViewSet):
@@ -53,6 +132,7 @@ class ActivityViewSet(viewsets.ModelViewSet):
 
         if is_admin(user) or is_secretary(user):
             pass
+
         elif is_department_leader(user):
             department = user_department(user)
 
@@ -60,6 +140,7 @@ class ActivityViewSet(viewsets.ModelViewSet):
                 return queryset.none()
 
             queryset = queryset.filter(department=department)
+
         else:
             return queryset.none()
 
@@ -75,17 +156,25 @@ class ActivityViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(activity_type=activity_type)
 
         if start_date:
-            queryset = queryset.filter(activity_date__gte=start_date)
+            parsed_start = parse_date(start_date)
+            if not parsed_start:
+                raise ValidationError({
+                    "start_date": "Use YYYY-MM-DD format."
+                })
+            queryset = queryset.filter(activity_date__gte=parsed_start)
 
         if end_date:
-            queryset = queryset.filter(activity_date__lte=end_date)
+            parsed_end = parse_date(end_date)
+            if not parsed_end:
+                raise ValidationError({
+                    "end_date": "Use YYYY-MM-DD format."
+                })
+            queryset = queryset.filter(activity_date__lte=parsed_end)
 
         return queryset
 
     def create(self, request, *args, **kwargs):
-        user = request.user
-
-        if not (is_admin(user) or is_department_leader(user)):
+        if not (is_admin(request.user) or is_department_leader(request.user)):
             raise PermissionDenied(
                 "Only administrators and department leaders can record activities."
             )
@@ -103,7 +192,7 @@ class ActivityViewSet(viewsets.ModelViewSet):
                     "Your account has no active department assignment."
                 )
 
-        else:
+        elif is_admin(user):
             department_id = self.request.data.get("department")
 
             if not department_id:
@@ -111,13 +200,14 @@ class ActivityViewSet(viewsets.ModelViewSet):
                     "department": "Select a department."
                 })
 
-            from departments.models import Department
-
             department = get_object_or_404(
                 Department,
                 pk=department_id,
                 is_active=True,
             )
+
+        else:
+            raise PermissionDenied("You cannot record activities.")
 
         serializer.save(
             department=department,
@@ -127,16 +217,14 @@ class ActivityViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         activity = self.get_object()
 
-        if not is_admin(request.user):
-            if not is_department_leader(request.user):
-                raise PermissionDenied(
-                    "You cannot edit this activity."
-                )
-
+        if is_department_leader(request.user):
             if activity.created_by_id != request.user.id:
                 raise PermissionDenied(
                     "You can only edit activities you recorded."
                 )
+
+        elif not is_admin(request.user):
+            raise PermissionDenied("You cannot edit this activity.")
 
         if activity.is_archived:
             raise PermissionDenied(
@@ -180,6 +268,14 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
 
         return queryset.none()
 
+    def create(self, request, *args, **kwargs):
+        if not (is_admin(request.user) or is_department_leader(request.user)):
+            raise PermissionDenied(
+                "Only administrators and department leaders can upload attachments."
+            )
+
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         user = self.request.user
         activity_id = self.request.data.get("activity")
@@ -214,23 +310,7 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
                 "file": "Select a file to upload."
             })
 
-        if uploaded_file.size > 10 * 1024 * 1024:
-            raise ValidationError({
-                "file": "Maximum file size is 10 MB."
-            })
-
-        allowed_extensions = {
-            ".jpg", ".jpeg", ".png", ".webp", ".pdf", ".docx"
-        }
-
-        import os
-
-        extension = os.path.splitext(uploaded_file.name)[1].lower()
-
-        if extension not in allowed_extensions:
-            raise ValidationError({
-                "file": "Only JPG, PNG, WEBP, PDF and DOCX files are allowed."
-            })
+        validate_uploaded_file(uploaded_file)
 
         serializer.save(
             activity=activity,
@@ -240,16 +320,16 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         attachment = self.get_object()
 
-        if not is_admin(request.user):
-            if not is_department_leader(request.user):
-                raise PermissionDenied(
-                    "You cannot delete attachments."
-                )
-
+        if is_department_leader(request.user):
             if attachment.uploaded_by_id != request.user.id:
                 raise PermissionDenied(
                     "You can only delete attachments you uploaded."
                 )
+
+        elif not is_admin(request.user):
+            raise PermissionDenied(
+                "You cannot delete attachments."
+            )
 
         attachment.file.delete(save=False)
         attachment.delete()
@@ -260,6 +340,7 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
 class ReportSubmissionViewSet(viewsets.ModelViewSet):
     serializer_class = ReportSubmissionSerializer
     permission_classes = [IsAuthenticated]
+
     http_method_names = [
         "get", "post", "put", "patch", "head", "options"
     ]
@@ -275,6 +356,14 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "activities",
             "activities__attachments",
         )
+
+        if getattr(self, "action", None) in {
+            "submit",
+            "start_review",
+            "request_changes",
+            "approve",
+        }:
+            queryset = queryset.select_for_update()
 
         if is_admin(user) or is_secretary(user):
             return queryset
@@ -295,6 +384,7 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
 
         return super().create(request, *args, **kwargs)
 
+    @transaction.atomic
     def perform_create(self, serializer):
         department = user_department(self.request.user)
 
@@ -308,8 +398,8 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             created_by=self.request.user,
         )
 
-        # If no activities were explicitly selected, include every
-        # activity in the department within the reporting dates.
+        # Automatically group all activities in the reporting period
+        # when the leader has not selected specific activities.
         if not report.activities.exists():
             matching_activities = Activity.objects.filter(
                 department=department,
@@ -333,10 +423,10 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "You can only edit reports you created."
             )
 
-        if report.status not in [
+        if report.status not in {
             ReportSubmission.Status.DRAFT,
             ReportSubmission.Status.CHANGES_REQUESTED,
-        ]:
+        }:
             raise PermissionDenied(
                 "Only draft or correction-requested reports can be edited."
             )
@@ -349,6 +439,7 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"])
+    @transaction.atomic
     def submit(self, request, pk=None):
         report = self.get_object()
 
@@ -362,10 +453,10 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "You can only submit reports you created."
             )
 
-        if report.status not in [
+        if report.status not in {
             ReportSubmission.Status.DRAFT,
             ReportSubmission.Status.CHANGES_REQUESTED,
-        ]:
+        }:
             raise ValidationError(
                 "This report cannot be submitted in its current state."
             )
@@ -377,19 +468,23 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
 
         report.status = ReportSubmission.Status.SUBMITTED
         report.submitted_at = timezone.now()
+        report.reviewed_at = None
+        report.reviewer = None
         report.review_comment = ""
-        report.save(
-            update_fields=[
-                "status",
-                "submitted_at",
-                "review_comment",
-                "updated_at",
-            ]
-        )
+
+        report.save(update_fields=[
+            "status",
+            "submitted_at",
+            "reviewed_at",
+            "reviewer",
+            "review_comment",
+            "updated_at",
+        ])
 
         return Response(self.get_serializer(report).data)
 
     @action(detail=True, methods=["post"])
+    @transaction.atomic
     def start_review(self, request, pk=None):
         report = self.get_object()
 
@@ -406,18 +501,18 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
         report.status = ReportSubmission.Status.UNDER_REVIEW
         report.reviewer = request.user
         report.reviewed_at = timezone.now()
-        report.save(
-            update_fields=[
-                "status",
-                "reviewer",
-                "reviewed_at",
-                "updated_at",
-            ]
-        )
+
+        report.save(update_fields=[
+            "status",
+            "reviewer",
+            "reviewed_at",
+            "updated_at",
+        ])
 
         return Response(self.get_serializer(report).data)
 
     @action(detail=True, methods=["post"])
+    @transaction.atomic
     def request_changes(self, request, pk=None):
         report = self.get_object()
 
@@ -426,10 +521,10 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "Only the Secretary can request report corrections."
             )
 
-        if report.status not in [
+        if report.status not in {
             ReportSubmission.Status.SUBMITTED,
             ReportSubmission.Status.UNDER_REVIEW,
-        ]:
+        }:
             raise ValidationError(
                 "This report cannot be returned for corrections."
             )
@@ -445,19 +540,19 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
         report.reviewer = request.user
         report.reviewed_at = timezone.now()
         report.review_comment = comment
-        report.save(
-            update_fields=[
-                "status",
-                "reviewer",
-                "reviewed_at",
-                "review_comment",
-                "updated_at",
-            ]
-        )
+
+        report.save(update_fields=[
+            "status",
+            "reviewer",
+            "reviewed_at",
+            "review_comment",
+            "updated_at",
+        ])
 
         return Response(self.get_serializer(report).data)
 
     @action(detail=True, methods=["post"])
+    @transaction.atomic
     def approve(self, request, pk=None):
         report = self.get_object()
 
@@ -466,10 +561,10 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "Only the Secretary can approve reports."
             )
 
-        if report.status not in [
+        if report.status not in {
             ReportSubmission.Status.SUBMITTED,
             ReportSubmission.Status.UNDER_REVIEW,
-        ]:
+        }:
             raise ValidationError(
                 "Only submitted or under-review reports can be approved."
             )
@@ -478,15 +573,14 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
         report.reviewer = request.user
         report.reviewed_at = timezone.now()
         report.review_comment = request.data.get("comment", "").strip()
-        report.save(
-            update_fields=[
-                "status",
-                "reviewer",
-                "reviewed_at",
-                "review_comment",
-                "updated_at",
-            ]
-        )
+
+        report.save(update_fields=[
+            "status",
+            "reviewer",
+            "reviewed_at",
+            "review_comment",
+            "updated_at",
+        ])
 
         return Response(self.get_serializer(report).data)
 
@@ -498,13 +592,12 @@ class ActivitySummaryView(APIView):
         user = request.user
 
         period_type = request.query_params.get(
-            "period_type",
-            "WEEKLY",
+            "period_type", "WEEKLY"
         ).upper()
 
         date_value = request.query_params.get("date")
 
-        if period_type not in ["WEEKLY", "MONTHLY"]:
+        if period_type not in {"WEEKLY", "MONTHLY"}:
             raise ValidationError({
                 "period_type": "Choose WEEKLY or MONTHLY."
             })
@@ -513,8 +606,6 @@ class ActivitySummaryView(APIView):
             raise ValidationError({
                 "date": "Provide a date in YYYY-MM-DD format."
             })
-
-        from django.utils.dateparse import parse_date
 
         selected_date = parse_date(date_value)
 
@@ -528,6 +619,7 @@ class ActivitySummaryView(APIView):
                 days=selected_date.weekday()
             )
             end_date = start_date + timedelta(days=6)
+
         else:
             start_date = selected_date.replace(day=1)
             last_day = calendar.monthrange(
@@ -559,13 +651,12 @@ class ActivitySummaryView(APIView):
 
         elif is_admin(user) or is_secretary(user):
             if department_id:
-                queryset = queryset.filter(
-                    department_id=department_id
-                )
-        else:
-            raise PermissionDenied("You cannot view activity summaries.")
+                queryset = queryset.filter(department_id=department_id)
 
-        total = queryset.count()
+        else:
+            raise PermissionDenied(
+                "You cannot view activity summaries."
+            )
 
         totals = queryset.aggregate(
             attendance=Sum("attendance_count"),
@@ -582,7 +673,7 @@ class ActivitySummaryView(APIView):
             "period_type": period_type,
             "start_date": start_date,
             "end_date": end_date,
-            "activity_count": total,
+            "activity_count": queryset.count(),
             "total_attendance": totals["attendance"] or 0,
             "total_expenditure": totals["expenditure"] or 0,
             "activities": serializer.data,
