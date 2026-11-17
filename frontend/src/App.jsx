@@ -24,6 +24,7 @@ import {
 
 import api from "./services/api";
 import ActivitiesPage from "./pages/Activities";
+import ReportsPage from "./pages/Reports";
 
 const navigation = [
   { label: "Overview", icon: LayoutDashboard },
@@ -70,9 +71,7 @@ function roleName(role) {
 }
 
 function initials(user) {
-  const name = displayName(user);
-
-  return name
+  return displayName(user)
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
@@ -87,39 +86,20 @@ function StatusBadge({ status }) {
     SUBMITTED: "bg-violet-50 text-violet-700",
     CHANGES_REQUESTED: "bg-amber-50 text-amber-700",
     DRAFT: "bg-slate-100 text-slate-600",
-    RECORDED: "bg-emerald-50 text-emerald-700",
   };
-
-  const labels = {
-    APPROVED: "Approved",
-    UNDER_REVIEW: "Under Review",
-    SUBMITTED: "Submitted",
-    CHANGES_REQUESTED: "Changes Requested",
-    DRAFT: "Draft",
-    RECORDED: "Recorded",
-  };
-
-  const normalized = String(status || "").toUpperCase();
 
   return (
     <span
       className={`rounded-full px-3 py-1 text-xs font-semibold ${
-        styles[normalized] || "bg-slate-100 text-slate-600"
+        styles[status] || "bg-slate-100 text-slate-600"
       }`}
     >
-      {labels[normalized] || status || "Recorded"}
+      {String(status || "Recorded").replaceAll("_", " ")}
     </span>
   );
 }
 
-function Sidebar({
-  active,
-  setActive,
-  open,
-  setOpen,
-  user,
-  onLogout,
-}) {
+function Sidebar({ active, setActive, open, setOpen, user, onLogout }) {
   const visibleNavigation = navigation.filter(
     (item) => !item.admin || user?.role === "ADMIN" || user?.is_superuser
   );
@@ -143,21 +123,13 @@ function Sidebar({
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-700 text-white">
               <Church size={21} />
             </div>
-
             <div>
-              <h1 className="text-sm font-bold tracking-tight text-slate-900">
-                MAIN ALTAR
-              </h1>
-              <p className="text-xs text-slate-500">
-                Reporting System
-              </p>
+              <h1 className="text-sm font-bold text-slate-900">MAIN ALTAR</h1>
+              <p className="text-xs text-slate-500">Reporting System</p>
             </div>
           </div>
 
-          <button
-            className="lg:hidden"
-            onClick={() => setOpen(false)}
-          >
+          <button className="lg:hidden" onClick={() => setOpen(false)}>
             <X size={20} />
           </button>
         </div>
@@ -194,10 +166,7 @@ function Sidebar({
 
         <div className="mt-auto border-t border-slate-100 p-4">
           <button
-            onClick={() => {
-              setActive("Settings");
-              setOpen(false);
-            }}
+            onClick={() => setActive("Settings")}
             className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium ${
               active === "Settings"
                 ? "bg-indigo-50 text-indigo-700"
@@ -217,7 +186,6 @@ function Sidebar({
               <p className="truncate text-sm font-semibold text-slate-800">
                 {displayName(user)}
               </p>
-
               <p className="text-xs text-slate-500">
                 {roleName(user?.role)}
               </p>
@@ -237,13 +205,7 @@ function Sidebar({
   );
 }
 
-function StatCard({
-  label,
-  value,
-  description,
-  icon: Icon,
-  color,
-}) {
+function StatCard({ label, value, description, icon: Icon, color }) {
   const colors = {
     blue: "bg-blue-50 text-blue-700",
     violet: "bg-violet-50 text-violet-700",
@@ -254,22 +216,13 @@ function StatCard({
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-slate-500">
-          {label}
-        </p>
-
+        <p className="text-sm font-medium text-slate-500">{label}</p>
         <div className={`rounded-xl p-2.5 ${colors[color]}`}>
           <Icon size={19} />
         </div>
       </div>
-
-      <h3 className="mt-5 text-3xl font-bold tracking-tight text-slate-900">
-        {value}
-      </h3>
-
-      <p className="mt-2 text-xs text-slate-500">
-        {description}
-      </p>
+      <h3 className="mt-5 text-3xl font-bold text-slate-900">{value}</h3>
+      <p className="mt-2 text-xs text-slate-500">{description}</p>
     </div>
   );
 }
@@ -284,39 +237,31 @@ function Overview({
   onRefresh,
   onNavigate,
 }) {
-  const approved = reports.filter(
-    (item) => item.status === "APPROVED"
+  const approved = reports.filter((item) => item.status === "APPROVED").length;
+
+  const awaitingReview = reports.filter((item) =>
+    ["SUBMITTED", "UNDER_REVIEW"].includes(item.status)
   ).length;
 
-  const awaitingReview = reports.filter(
-    (item) =>
-      ["SUBMITTED", "UNDER_REVIEW"].includes(item.status)
+  const outstanding = reports.filter((item) =>
+    ["DRAFT", "CHANGES_REQUESTED"].includes(item.status)
   ).length;
-
-  const outstanding = reports.filter(
-    (item) =>
-      ["DRAFT", "CHANGES_REQUESTED"].includes(item.status)
-  ).length;
-
-  const today = new Date().toLocaleDateString("en-GB", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
 
   return (
     <div className="space-y-7">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <p className="mb-1 text-sm text-slate-500">
-            {today}
+            {new Date().toLocaleDateString("en-GB", {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            })}
           </p>
-
-          <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+          <h2 className="text-2xl font-bold text-slate-900">
             Welcome back, {displayName(user).split(" ")[0]}
           </h2>
-
           <p className="mt-1 text-sm text-slate-500">
             Here's what's happening across your departments.
           </p>
@@ -326,18 +271,15 @@ function Overview({
           <button
             onClick={onRefresh}
             disabled={loading}
-            className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
           >
-            <RefreshCw
-              size={17}
-              className={loading ? "animate-spin" : ""}
-            />
+            <RefreshCw size={17} className={loading ? "animate-spin" : ""} />
             Refresh
           </button>
 
           <button
             onClick={() => onNavigate("Activities")}
-            className="flex items-center justify-center gap-2 rounded-xl bg-indigo-700 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-800"
+            className="flex items-center gap-2 rounded-xl bg-indigo-700 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-800"
           >
             <Plus size={18} />
             Record Activity
@@ -355,19 +297,17 @@ function Overview({
         <StatCard
           label="Total Activities"
           value={activities.length}
-          description="Recorded activities in loaded results"
+          description="Recorded activities"
           icon={Activity}
           color="blue"
         />
-
         <StatCard
           label="Reports Submitted"
           value={reports.length}
-          description="Reports in loaded results"
+          description="Reports in the system"
           icon={FileText}
           color="violet"
         />
-
         <StatCard
           label="Awaiting Review"
           value={awaitingReview}
@@ -375,7 +315,6 @@ function Overview({
           icon={Clock3}
           color="amber"
         />
-
         <StatCard
           label="Approved Reports"
           value={approved}
@@ -389,18 +328,14 @@ function Overview({
         <section className="rounded-2xl border border-slate-200 bg-white p-5 xl:col-span-2">
           <div className="mb-5 flex items-center justify-between">
             <div>
-              <h3 className="font-bold text-slate-900">
-                Recent Activities
-              </h3>
-
+              <h3 className="font-bold text-slate-900">Recent Activities</h3>
               <p className="mt-1 text-xs text-slate-500">
                 Latest recorded department activities
               </p>
             </div>
-
             <button
               onClick={() => onNavigate("Activities")}
-              className="text-sm font-semibold text-indigo-700 hover:text-indigo-900"
+              className="text-sm font-semibold text-indigo-700"
             >
               View all
             </button>
@@ -416,43 +351,31 @@ function Overview({
                   <th className="pb-3 font-medium">Status</th>
                 </tr>
               </thead>
-
               <tbody>
                 {activities.slice(0, 5).map((activity) => (
-                  <tr
-                    key={activity.id}
-                    className="border-b border-slate-50 last:border-0"
-                  >
+                  <tr key={activity.id} className="border-b border-slate-50">
                     <td className="py-4 pr-3">
                       <p className="text-sm font-semibold text-slate-800">
                         {activity.title}
                       </p>
-
                       <p className="mt-1 text-xs text-slate-400">
                         {activity.activity_type}
                       </p>
                     </td>
-
                     <td className="py-4 pr-3 text-sm text-slate-600">
                       {activity.department_name || "—"}
                     </td>
-
                     <td className="py-4 pr-3 text-sm text-slate-500">
                       {formatDate(activity.activity_date)}
                     </td>
-
                     <td className="py-4">
                       <StatusBadge status="RECORDED" />
                     </td>
                   </tr>
                 ))}
-
                 {!loading && activities.length === 0 && (
                   <tr>
-                    <td
-                      colSpan="4"
-                      className="py-8 text-center text-sm text-slate-400"
-                    >
+                    <td colSpan="4" className="py-8 text-center text-sm text-slate-400">
                       No activities have been recorded yet.
                     </td>
                   </tr>
@@ -463,88 +386,37 @@ function Overview({
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5">
-          <div className="mb-5">
-            <h3 className="font-bold text-slate-900">
-              Reporting Overview
-            </h3>
+          <h3 className="font-bold text-slate-900">Reporting Overview</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Reports currently in the system
+          </p>
 
-            <p className="mt-1 text-xs text-slate-500">
-              Reports currently in the system
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-indigo-50 p-4">
+          <div className="mt-5 rounded-xl bg-indigo-50 p-4">
             <div className="flex items-center gap-2 text-indigo-700">
               <CalendarDays size={17} />
-              <span className="text-xs font-semibold">
-                Report submissions
-              </span>
+              <span className="text-xs font-semibold">Report submissions</span>
             </div>
-
             <p className="mt-3 text-2xl font-bold text-slate-900">
               {reports.length}
-            </p>
-
-            <p className="mt-1 text-xs text-slate-500">
-              Reports in loaded results
             </p>
           </div>
 
           <div className="mt-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                <CheckCircle2
-                  size={17}
-                  className="text-emerald-600"
-                />
-                Approved
-              </div>
-
-              <span className="text-sm font-bold text-slate-900">
-                {approved}
-              </span>
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-600">Approved</span>
+              <strong>{approved}</strong>
             </div>
-
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                <Clock3
-                  size={17}
-                  className="text-blue-600"
-                />
-                Awaiting review
-              </div>
-
-              <span className="text-sm font-bold text-slate-900">
-                {awaitingReview}
-              </span>
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-600">Awaiting review</span>
+              <strong>{awaitingReview}</strong>
             </div>
-
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                <AlertCircle
-                  size={17}
-                  className="text-amber-600"
-                />
-                Draft / changes
-              </div>
-
-              <span className="text-sm font-bold text-slate-900">
-                {outstanding}
-              </span>
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-600">Draft / corrections</span>
+              <strong>{outstanding}</strong>
             </div>
-
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm text-slate-600">
-                <Building2
-                  size={17}
-                  className="text-indigo-600"
-                />
-                Departments
-              </div>
-
-              <span className="text-sm font-bold text-slate-900">
-                {departments.length}
-              </span>
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-600">Departments</span>
+              <strong>{departments.length}</strong>
             </div>
           </div>
         </section>
@@ -556,15 +428,13 @@ function Overview({
             <h3 className="font-bold text-slate-900">
               Recent Report Submissions
             </h3>
-
             <p className="mt-1 text-xs text-slate-500">
               Latest reports from your departments
             </p>
           </div>
-
           <button
             onClick={() => onNavigate("Reports")}
-            className="text-sm font-semibold text-indigo-700 hover:text-indigo-900"
+            className="text-sm font-semibold text-indigo-700"
           >
             All reports
           </button>
@@ -575,43 +445,32 @@ function Overview({
             <thead>
               <tr className="border-b border-slate-100 text-xs text-slate-400">
                 <th className="pb-3 font-medium">Department</th>
-                <th className="pb-3 font-medium">Reporting period</th>
+                <th className="pb-3 font-medium">Reporting Period</th>
                 <th className="pb-3 font-medium">Submitted</th>
                 <th className="pb-3 font-medium">Status</th>
               </tr>
             </thead>
-
             <tbody>
               {reports.slice(0, 5).map((report) => (
-                <tr
-                  key={report.id}
-                  className="border-b border-slate-50 last:border-0"
-                >
+                <tr key={report.id} className="border-b border-slate-50">
                   <td className="py-4 text-sm font-semibold text-slate-800">
                     {report.department_name || "—"}
                   </td>
-
                   <td className="py-4 text-sm text-slate-600">
                     {report.period_type} · {formatDate(report.start_date)} –{" "}
                     {formatDate(report.end_date)}
                   </td>
-
                   <td className="py-4 text-sm text-slate-500">
                     {formatDate(report.submitted_at)}
                   </td>
-
                   <td className="py-4">
                     <StatusBadge status={report.status} />
                   </td>
                 </tr>
               ))}
-
               {!loading && reports.length === 0 && (
                 <tr>
-                  <td
-                    colSpan="4"
-                    className="py-8 text-center text-sm text-slate-400"
-                  >
+                  <td colSpan="4" className="py-8 text-center text-sm text-slate-400">
                     No reports have been submitted yet.
                   </td>
                 </tr>
@@ -630,11 +489,7 @@ function PlaceholderPage({ title }) {
       <div className="mb-4 rounded-2xl bg-indigo-50 p-4 text-indigo-700">
         <FileText size={28} />
       </div>
-
-      <h2 className="text-xl font-bold text-slate-900">
-        {title}
-      </h2>
-
+      <h2 className="text-xl font-bold text-slate-900">{title}</h2>
       <p className="mt-2 max-w-sm text-sm text-slate-500">
         This workspace is next in the frontend development sequence.
       </p>
@@ -645,11 +500,9 @@ function PlaceholderPage({ title }) {
 export default function App({ user, onLogout }) {
   const [active, setActive] = useState("Overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
   const [activities, setActivities] = useState([]);
   const [reports, setReports] = useState([]);
   const [departments, setDepartments] = useState([]);
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -684,11 +537,7 @@ export default function App({ user, onLogout }) {
     }
 
     if (failures.length) {
-      setError(
-        `Some dashboard data could not be loaded: ${failures.join(
-          ", "
-        )}. Check your account permissions or backend endpoints.`
-      );
+      setError(`Some dashboard data could not be loaded: ${failures.join(", ")}.`);
     }
 
     setLoading(false);
@@ -727,12 +576,8 @@ export default function App({ user, onLogout }) {
             >
               <Menu size={22} />
             </button>
-
             <div>
-              <p className="text-sm font-bold text-slate-900">
-                {active}
-              </p>
-
+              <p className="text-sm font-bold text-slate-900">{active}</p>
               <p className="hidden text-xs text-slate-500 sm:block">
                 Moi University Main Altar
               </p>
@@ -742,7 +587,6 @@ export default function App({ user, onLogout }) {
           <div className="flex items-center gap-3 sm:gap-5">
             <div className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 md:flex">
               <Search size={16} className="text-slate-400" />
-
               <input
                 placeholder="Search anything..."
                 className="w-36 border-0 bg-transparent text-sm outline-none placeholder:text-slate-400"
@@ -753,17 +597,14 @@ export default function App({ user, onLogout }) {
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-sm font-bold text-indigo-700">
                 {initials(user)}
               </div>
-
               <div className="hidden sm:block">
                 <p className="text-sm font-semibold text-slate-800">
                   {displayName(user)}
                 </p>
-
                 <p className="text-xs text-slate-500">
                   {roleName(user?.role)}
                 </p>
               </div>
-
               <button
                 onClick={onLogout}
                 title="Sign out"
@@ -789,6 +630,8 @@ export default function App({ user, onLogout }) {
             />
           ) : active === "Activities" ? (
             <ActivitiesPage user={user} />
+          ) : active === "Reports" ? (
+            <ReportsPage user={user} />
           ) : (
             <PlaceholderPage title={active} />
           )}
