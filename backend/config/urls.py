@@ -9,31 +9,41 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 
+
 urlpatterns = [
     path("admin/", admin.site.urls),
 
+    # Authentication
     path(
         "api/v1/auth/login/",
         TokenObtainPairView.as_view(),
         name="token_obtain_pair",
     ),
-
     path(
         "api/v1/auth/refresh/",
         TokenRefreshView.as_view(),
         name="token_refresh",
     ),
 
+    # Accounts
     path(
         "api/v1/accounts/",
         include("accounts.urls"),
     ),
 
+    # Departments
+    path(
+        "api/v1/departments/",
+        include("departments.urls"),
+    ),
+
+    # Reporting
     path(
         "api/v1/reports/",
         include("reports.urls"),
     ),
 ]
+
 
 if settings.DEBUG:
     urlpatterns += static(
