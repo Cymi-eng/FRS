@@ -1,12 +1,12 @@
 
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from .models import User
 
 
 @admin.register(User)
-class CustomUserAdmin(UserAdmin):
+class UserAdmin(BaseUserAdmin):
     list_display = (
         "username",
         "email",
@@ -21,6 +21,7 @@ class CustomUserAdmin(UserAdmin):
         "role",
         "is_active",
         "is_staff",
+        "is_superuser",
     )
 
     search_fields = (
@@ -31,9 +32,9 @@ class CustomUserAdmin(UserAdmin):
         "phone_number",
     )
 
-    fieldsets = UserAdmin.fieldsets + (
+    fieldsets = BaseUserAdmin.fieldsets + (
         (
-            "Moi Altar Account Details",
+            "Organization Details",
             {
                 "fields": (
                     "role",
@@ -43,9 +44,9 @@ class CustomUserAdmin(UserAdmin):
         ),
     )
 
-    add_fieldsets = UserAdmin.add_fieldsets + (
+    add_fieldsets = BaseUserAdmin.add_fieldsets + (
         (
-            "Moi Altar Account Details",
+            "Organization Details",
             {
                 "fields": (
                     "role",
