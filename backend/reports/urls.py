@@ -8,6 +8,10 @@ from .views import (
     ActivityViewSet,
     ReportSubmissionViewSet,
 )
+from .exports import (
+    ReportPDFExportView,
+    ReportWordExportView,
+)
 
 router = DefaultRouter()
 
@@ -29,5 +33,15 @@ urlpatterns = [
         "activity-summary/",
         ActivitySummaryView.as_view(),
         name="activity-summary",
+    ),
+    path(
+        "submissions/<int:report_id>/export/pdf/",
+        ReportPDFExportView.as_view(),
+        name="report-export-pdf",
+    ),
+    path(
+        "submissions/<int:report_id>/export/word/",
+        ReportWordExportView.as_view(),
+        name="report-export-word",
     ),
 ]

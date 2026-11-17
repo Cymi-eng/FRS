@@ -22,6 +22,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from departments.models import Department
+from notifications.services import (
+    notify_secretaries,
+    notify_report_changes_requested,
+    notify_report_approved,
+)
 
 from .models import Activity, ActivityAttachment, ReportSubmission
 from .serializers import (
@@ -398,7 +403,7 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             created_by=self.request.user,
         )
 
-        # Automatically group all activities in the reporting period
+        # Automatically group activities in the reporting period
         # when the leader has not selected specific activities.
         if not report.activities.exists():
             matching_activities = Activity.objects.filter(
@@ -453,7 +458,9 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "You can only submit reports you created."
             )
 
-        if report.status not in {
+        previous_status = report.status
+
+        if previous_status not in {
             ReportSubmission.Status.DRAFT,
             ReportSubmission.Status.CHANGES_REQUESTED,
         }:
@@ -480,6 +487,15 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "review_comment",
             "updated_at",
         ])
+
+        # Notify Secretaries after a successful submission.
+        # A correction-requested report counts as a resubmission.
+        notify_secretaries(
+            report,
+            resubmitted=(
+                previous_status == ReportSubmission.Status.CHANGES_REQUESTED
+            ),
+        )
 
         return Response(self.get_serializer(report).data)
 
@@ -549,6 +565,9 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
 
+        # Notify the department leader about the corrections.
+        notify_report_changes_requested(report)
+
         return Response(self.get_serializer(report).data)
 
     @action(detail=True, methods=["post"])
@@ -581,6 +600,9 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "review_comment",
             "updated_at",
         ])
+
+        # Notify the department leader about the approval.
+        notify_report_approved(report)
 
         return Response(self.get_serializer(report).data)
 
