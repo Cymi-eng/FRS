@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import api from "./services/api";
 import App from "./App";
@@ -23,6 +22,7 @@ export default function AuthGate() {
       } catch {
         localStorage.removeItem("access_token");
         localStorage.removeItem("refresh_token");
+        setUser(null);
       } finally {
         setChecking(false);
       }
@@ -31,12 +31,18 @@ export default function AuthGate() {
     verifySession();
   }, []);
 
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+    setUser(null);
+  };
+
   if (checking) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <div className="text-sm font-medium text-slate-500">
+        <p className="text-sm font-medium text-slate-500">
           Loading your workspace...
-        </div>
+        </p>
       </div>
     );
   }
@@ -45,5 +51,5 @@ export default function AuthGate() {
     return <Login onLogin={setUser} />;
   }
 
-  return <App />;
+  return <App user={user} onLogout={handleLogout} />;
 }
