@@ -342,7 +342,7 @@ export default function Activities({ user }) {
                   <label className="mb-2 block text-sm font-medium text-slate-700">
                     Department *
                   </label>
-                  <select
+                  {/* <select
                     value={selectedDepartment}
                     onChange={(event) => setSelectedDepartment(event.target.value)}
                     required
@@ -354,7 +354,7 @@ export default function Activities({ user }) {
                         {department.name}
                       </option>
                     ))}
-                  </select>
+                  </select> */}
                 </div>
               )}
 
