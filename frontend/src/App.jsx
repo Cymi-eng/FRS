@@ -160,8 +160,8 @@ function Sidebar({ active, setActive, open, setOpen, user, onLogout }) {
               <img src="/app-icon.png" alt="Moi University Main Altar" className="h-8 w-8 object-contain" />
             </div>
             <div>
-              <h1 className="text-sm font-bold text-slate-900">MAIN ALTAR</h1>
-              <p className="text-xs text-slate-500">Reporting System</p>
+              <h1 className="text-sm font-bold text-slate-900">MOI UNIVERSITY MAIN ALTAR</h1>
+              <p className="text-xs text-slate-500">Fellowship Reporting System</p>
             </div>
           </div>
 
