@@ -1,15 +1,21 @@
 
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from .views import DepartmentViewSet
-
-
-router = DefaultRouter()
-
-router.register(
-    "",
+from .views import (
     DepartmentViewSet,
-    basename="department",
+    MemberViewSet,
+    PublicDepartmentListView,
 )
 
-urlpatterns = router.urls
+router = DefaultRouter()
+router.register("members", MemberViewSet, basename="member")
+router.register("", DepartmentViewSet, basename="department")
+
+urlpatterns = [
+    path(
+        "public/",
+        PublicDepartmentListView.as_view(),
+        name="public-departments",
+    ),
+] + router.urls

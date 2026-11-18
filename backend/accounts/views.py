@@ -1,5 +1,6 @@
 
 from django.contrib.auth import update_session_auth_hash
+from django.db import transaction
 
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.decorators import action
@@ -16,6 +17,8 @@ from .serializers import (
     UserProfileSerializer,
     UserRegistrationSerializer,
 )
+
+from departments.models import Department
 
 
 class IsSystemAdministrator(permissions.BasePermission):
@@ -122,7 +125,7 @@ class UserManagementViewSet(viewsets.ModelViewSet):
             role=User.Role.DEPARTMENT_LEADER,
             approval_status=User.ApprovalStatus.PENDING,
             is_active=False,
-        ).order_by("date_joined")
+        ).prefetch_related("requested_departments").order_by("date_joined")
 
         serializer = self.get_serializer(pending_users, many=True)
 
@@ -130,29 +133,99 @@ class UserManagementViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
-        user = self.get_object()
+        with transaction.atomic():
+            user = User.objects.select_for_update().get(pk=pk)
 
-        if user.role != User.Role.DEPARTMENT_LEADER:
-            return Response(
-                {"detail": "Only Department Leader accounts can be approved here."},
-                status=status.HTTP_400_BAD_REQUEST,
+            if user.role != User.Role.DEPARTMENT_LEADER:
+                return Response(
+                    {
+                        "detail": (
+                            "Only Department Leader accounts "
+                            "can be approved here."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if user.approval_status != User.ApprovalStatus.PENDING:
+                return Response(
+                    {"detail": "This account is not awaiting approval."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            requested_departments = list(
+                user.requested_departments.all()
             )
 
-        if user.approval_status != User.ApprovalStatus.PENDING:
-            return Response(
-                {"detail": "This account is not awaiting approval."},
-                status=status.HTTP_400_BAD_REQUEST,
+            if not requested_departments:
+                return Response(
+                    {
+                        "detail": (
+                            "This applicant has not requested any departments."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            department_ids = [
+                department.id for department in requested_departments
+            ]
+
+            departments = list(
+                Department.objects.select_for_update().filter(
+                    id__in=department_ids,
+                    is_active=True,
+                )
             )
 
-        user.approval_status = User.ApprovalStatus.APPROVED
-        user.is_active = True
-        user.save(update_fields=["approval_status", "is_active"])
+            if len(departments) != len(department_ids):
+                return Response(
+                    {
+                        "detail": (
+                            "One or more requested departments are inactive "
+                            "or no longer available. Review the application."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            conflicts = [
+                department.name
+                for department in departments
+                if department.leader_id not in (None, user.id)
+            ]
+
+            if conflicts:
+                return Response(
+                    {
+                        "detail": (
+                            "These departments already have another leader: "
+                            + ", ".join(conflicts)
+                        ),
+                        "conflicting_departments": conflicts,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            for department in departments:
+                department.leader = user
+                department.save(update_fields=["leader"])
+
+            user.approval_status = User.ApprovalStatus.APPROVED
+            user.is_active = True
+            user.save(update_fields=["approval_status", "is_active"])
 
         return Response({
-            "detail": f"Account for {user.username} approved successfully.",
+            "detail": (
+                f"Account for {user.username} approved successfully. "
+                "Requested departments have been assigned."
+            ),
             "username": user.username,
             "approval_status": user.approval_status,
             "is_active": user.is_active,
+            "assigned_departments": [
+                department.name for department in departments
+            ],
         })
 
     @action(detail=True, methods=["post"])
@@ -161,7 +234,12 @@ class UserManagementViewSet(viewsets.ModelViewSet):
 
         if user.role != User.Role.DEPARTMENT_LEADER:
             return Response(
-                {"detail": "Only Department Leader accounts can be rejected here."},
+                {
+                    "detail": (
+                        "Only Department Leader accounts "
+                        "can be rejected here."
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -214,7 +292,11 @@ class UserManagementViewSet(viewsets.ModelViewSet):
 
         if user.approval_status == User.ApprovalStatus.PENDING:
             return Response(
-                {"detail": "Approve this account through the approval endpoint."},
+                {
+                    "detail": (
+                        "Approve this account through the approval endpoint."
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

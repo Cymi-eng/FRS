@@ -33,6 +33,12 @@ class User(AbstractUser):
         default=ApprovalStatus.APPROVED,
     )
 
+    requested_departments = models.ManyToManyField(
+        "departments.Department",
+        blank=True,
+        related_name="department_leader_applicants",
+    )
+
     def __str__(self):
         return (
             f"{self.get_full_name() or self.username} "

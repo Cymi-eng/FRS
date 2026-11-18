@@ -5,6 +5,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from .models import User
+from departments.models import Department
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -41,6 +42,12 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         style={"input_type": "password"},
     )
 
+    requested_departments = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.filter(is_active=True),
+        many=True,
+        write_only=True,
+    )
+
     class Meta:
         model = User
         fields = (
@@ -52,6 +59,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             "phone_number",
             "password",
             "confirm_password",
+            "requested_departments",
         )
         read_only_fields = ("id",)
 
@@ -62,6 +70,13 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_requested_departments(self, value):
+        if len(value) != 1:
+            raise serializers.ValidationError(
+                "You must select exactly one department."
+            )
+        return value
+
     def validate(self, attrs):
         if attrs["password"] != attrs["confirm_password"]:
             raise serializers.ValidationError({
@@ -69,12 +84,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             })
 
         validate_password(attrs["password"])
-
         return attrs
 
     def create(self, validated_data):
         validated_data.pop("confirm_password")
         password = validated_data.pop("password")
+        requested_departments = validated_data.pop(
+            "requested_departments"
+        )
 
         user = User(
             **validated_data,
@@ -87,6 +104,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         user.set_password(password)
         user.save()
+        user.requested_departments.set(requested_departments)
 
         return user
 
@@ -104,6 +122,8 @@ class UserManagementSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
+    requested_departments = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = (
@@ -118,8 +138,24 @@ class UserManagementSerializer(serializers.ModelSerializer):
             "password",
             "is_active",
             "approval_status",
+            "requested_departments",
         )
-        read_only_fields = ("id", "role_display", "approval_status")
+        read_only_fields = (
+            "id",
+            "role_display",
+            "approval_status",
+            "requested_departments",
+        )
+
+    def get_requested_departments(self, obj):
+        return [
+            {
+                "id": department.id,
+                "name": department.name,
+                "code": department.code,
+            }
+            for department in obj.requested_departments.all()
+        ]
 
     def validate_password(self, value):
         validate_password(value, user=self.instance)

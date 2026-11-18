@@ -21,8 +21,6 @@ import {
   Activity,
   RefreshCw,
   ShieldCheck,
-  UserRound,
-  TrendingUp,
 } from "lucide-react";
 
 import api from "./services/api";
@@ -31,6 +29,7 @@ import ReportsPage from "./pages/Reports";
 import DepartmentsPage from "./pages/Departments";
 import ApprovalsPage from "./pages/Approvals";
 import UsersPage from "./pages/Users";
+import MembersPage from "./pages/Members";
 
 function getItems(data) {
   if (Array.isArray(data)) return data;
@@ -128,6 +127,7 @@ function Sidebar({ active, setActive, open, setOpen, user, onLogout }) {
     { label: "Overview", icon: LayoutDashboard },
     { label: "Activities", icon: ClipboardList },
     { label: "Reports", icon: FileText },
+    { label: "Members", icon: Users },
     ...(role === "ADMIN"
       ? [
           { label: "Departments", icon: Building2 },
@@ -687,6 +687,7 @@ function LeaderDashboard({
   user,
   activities,
   reports,
+  departments,
   loading,
   error,
   onRefresh,
@@ -695,17 +696,19 @@ function LeaderDashboard({
   const approved = reports.filter((r) => r.status === "APPROVED").length;
   const drafts = reports.filter((r) => r.status === "DRAFT").length;
   const corrections = reports.filter((r) => r.status === "CHANGES_REQUESTED").length;
+
   const departmentName =
+    departments?.[0]?.name ||
     activities[0]?.department_name ||
     reports[0]?.department_name ||
-    "Your assigned department";
+    "Department not assigned";
 
   return (
     <div className="space-y-7">
       <PageHeading
         eyebrow="Department workspace"
-        title={`Welcome, ${displayName(user).split(" ")[0]}`}
-        description={`Manage activities and reporting for ${departmentName}.`}
+        title={`Welcome, ${displayName(user)}`}
+        description={`You are managing the ${departmentName} department.`}
       >
         <ActionButton icon={RefreshCw} secondary onClick={onRefresh}>
           Refresh
@@ -725,14 +728,26 @@ function LeaderDashboard({
         <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
           <div>
             <p className="text-xs font-bold uppercase tracking-wider text-indigo-200">
-              Your department
+              Department leader
             </p>
-            <h3 className="mt-2 text-2xl font-bold">{departmentName}</h3>
-            <p className="mt-2 max-w-xl text-sm text-indigo-100">
+
+            <h3 className="mt-2 text-2xl font-bold">
+              {displayName(user)}
+            </h3>
+
+            <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-white/10 px-3 py-2">
+              <Building2 size={17} className="text-indigo-200" />
+              <span className="text-sm font-semibold">
+                {departmentName}
+              </span>
+            </div>
+
+            <p className="mt-4 max-w-xl text-sm text-indigo-100">
               Record activities as they happen. The system groups them into
               weekly and monthly reporting periods for you to review and submit.
             </p>
           </div>
+
           <button
             onClick={() => onNavigate("Reports")}
             className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-indigo-900 hover:bg-indigo-50"
@@ -868,6 +883,8 @@ export default function App({ user, onLogout }) {
     if (role === "ADMIN") {
       requests.push(api.get("/departments/"));
       requests.push(api.get("/accounts/users/"));
+    } else if (role === "DEPARTMENT_LEADER") {
+      requests.push(api.get("/departments/"));
     }
 
     const results = await Promise.allSettled(requests);
@@ -899,6 +916,14 @@ export default function App({ user, onLogout }) {
       }
     }
 
+    if (role === "DEPARTMENT_LEADER") {
+      if (results[2]?.status === "fulfilled") {
+        setDepartments(getItems(results[2].value.data));
+      } else {
+        failures.push("department");
+      }
+    }
+
     if (failures.length) {
       setError(
         `Some dashboard information could not be loaded: ${failures.join(", ")}.`
@@ -925,6 +950,7 @@ export default function App({ user, onLogout }) {
     const descriptions = {
       Departments: "Manage church departments and their assigned leaders.",
       Users: "Create and manage system accounts and role assignments.",
+      Members: "Manage the church member register and department memberships.",
       "Account Approvals": "Review and approve department leader registrations.",
       Notifications: "View important reporting and system notifications.",
       Settings: "Manage your account settings.",
@@ -1023,6 +1049,7 @@ export default function App({ user, onLogout }) {
               user={user}
               activities={activities}
               reports={reports}
+              departments={departments}
               loading={loading}
               error={error}
               onRefresh={loadDashboard}
@@ -1039,6 +1066,8 @@ export default function App({ user, onLogout }) {
 
           {active === "Users" && role === "ADMIN" && <UsersPage />}
 
+          {active === "Members" && <MembersPage user={user} />}
+
           {active === "Account Approvals" && role === "ADMIN" && (
             <ApprovalsPage />
           )}
@@ -1048,6 +1077,7 @@ export default function App({ user, onLogout }) {
             active !== "Reports" &&
             active !== "Departments" &&
             active !== "Users" &&
+            active !== "Members" &&
             active !== "Account Approvals" && (
               <PlaceholderPage title={active} description={pageDescription} />
             )}

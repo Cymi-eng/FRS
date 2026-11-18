@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Church,
   LockKeyhole,
@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
+  Building2,
 } from "lucide-react";
 import api from "../services/api";
 
@@ -19,6 +20,9 @@ export default function Login({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  const [departments, setDepartments] = useState([]);
+  const [departmentsLoading, setDepartmentsLoading] = useState(false);
 
   const [loginForm, setLoginForm] = useState({
     username: "",
@@ -31,12 +35,55 @@ export default function Login({ onLogin }) {
     last_name: "",
     email: "",
     phone_number: "",
+    requested_department: "",
     password: "",
     confirm_password: "",
   });
 
   const inputClass =
     "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100";
+
+  useEffect(() => {
+    if (mode !== "register") return;
+
+    let mounted = true;
+
+    const loadDepartments = async () => {
+      setDepartmentsLoading(true);
+      setError("");
+
+      try {
+        // Public endpoint: applicants must not need to log in to view departments.
+        const response = await api.get("/departments/public/");
+
+        const data = Array.isArray(response.data)
+          ? response.data
+          : response.data.results || [];
+
+        if (mounted) {
+          setDepartments(data);
+        }
+      } catch (err) {
+        if (mounted) {
+          setDepartments([]);
+          setError(
+            err.response?.data?.detail ||
+              "Unable to load departments. Please try again later."
+          );
+        }
+      } finally {
+        if (mounted) {
+          setDepartmentsLoading(false);
+        }
+      }
+    };
+
+    loadDepartments();
+
+    return () => {
+      mounted = false;
+    };
+  }, [mode]);
 
   const handleLoginChange = (event) => {
     setLoginForm({
@@ -86,6 +133,12 @@ export default function Login({ onLogin }) {
     setError("");
     setSuccess("");
 
+    if (!registerForm.requested_department) {
+      setError("Please select one department.");
+      setLoading(false);
+      return;
+    }
+
     if (registerForm.password !== registerForm.confirm_password) {
       setError("Your passwords do not match.");
       setLoading(false);
@@ -93,10 +146,25 @@ export default function Login({ onLogin }) {
     }
 
     try {
-      await api.post("/accounts/register/", registerForm);
+      const payload = {
+        username: registerForm.username,
+        first_name: registerForm.first_name,
+        last_name: registerForm.last_name,
+        email: registerForm.email,
+        phone_number: registerForm.phone_number,
+        password: registerForm.password,
+        confirm_password: registerForm.confirm_password,
+
+        // Backend expects a list, but the applicant selects exactly one.
+        requested_departments: [
+          Number(registerForm.requested_department),
+        ],
+      };
+
+      await api.post("/accounts/register/", payload);
 
       setSuccess(
-        "Your account request has been submitted successfully. An administrator must approve your account before you can log in."
+        "Your account request has been submitted successfully. An administrator must approve your account before you can log in. Your selected department will be assigned after approval."
       );
 
       setRegisterForm({
@@ -105,10 +173,10 @@ export default function Login({ onLogin }) {
         last_name: "",
         email: "",
         phone_number: "",
+        requested_department: "",
         password: "",
         confirm_password: "",
       });
-
     } catch (err) {
       const data = err.response?.data;
 
@@ -138,9 +206,8 @@ export default function Login({ onLogin }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-10">
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-8 sm:py-10">
       <div className="grid w-full max-w-5xl overflow-hidden rounded-3xl bg-white shadow-xl lg:grid-cols-2">
-
         <div className="hidden flex-col justify-between bg-indigo-950 p-10 text-white lg:flex">
           <div>
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10">
@@ -187,9 +254,8 @@ export default function Login({ onLogin }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-center p-6 sm:p-10">
+        <div className="flex items-center justify-center p-5 sm:p-10">
           <div className="w-full max-w-md">
-
             <div className="mb-8 text-center lg:text-left">
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700 lg:hidden">
                 <Church size={28} />
@@ -245,7 +311,9 @@ export default function Login({ onLogin }) {
                   <CheckCircle2 size={19} />
                   Registration submitted
                 </div>
+
                 <p className="mt-2 leading-6">{success}</p>
+
                 <button
                   type="button"
                   onClick={() => switchMode("login")}
@@ -262,6 +330,7 @@ export default function Login({ onLogin }) {
                   <label className="mb-2 block text-sm font-medium text-slate-700">
                     Username
                   </label>
+
                   <div className="relative">
                     <UserRound
                       size={18}
@@ -283,6 +352,7 @@ export default function Login({ onLogin }) {
                   <label className="mb-2 block text-sm font-medium text-slate-700">
                     Password
                   </label>
+
                   <div className="relative">
                     <LockKeyhole
                       size={18}
@@ -372,6 +442,7 @@ export default function Login({ onLogin }) {
                   <label className="mb-2 block text-sm font-medium text-slate-700">
                     Email address *
                   </label>
+
                   <div className="relative">
                     <Mail
                       size={18}
@@ -394,6 +465,7 @@ export default function Login({ onLogin }) {
                   <label className="mb-2 block text-sm font-medium text-slate-700">
                     Phone number
                   </label>
+
                   <div className="relative">
                     <Phone
                       size={18}
@@ -407,6 +479,42 @@ export default function Login({ onLogin }) {
                       className={`${inputClass} pl-10`}
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    <span className="inline-flex items-center gap-2">
+                      <Building2 size={16} />
+                      Select your department *
+                    </span>
+                  </label>
+
+                  <select
+                    required
+                    name="requested_department"
+                    value={registerForm.requested_department}
+                    onChange={handleRegisterChange}
+                    disabled={departmentsLoading || departments.length === 0}
+                    className={inputClass}
+                  >
+                    <option value="">
+                      {departmentsLoading
+                        ? "Loading departments..."
+                        : departments.length === 0
+                          ? "No departments available"
+                          : "Choose one department"}
+                    </option>
+
+                    {departments.map((department) => (
+                      <option key={department.id} value={department.id}>
+                        {department.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <p className="mt-2 text-xs text-slate-500">
+                    Each Department Leader can register for only one department.
+                  </p>
                 </div>
 
                 <div>
@@ -443,12 +551,17 @@ export default function Login({ onLogin }) {
 
                 <div className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">
                   Your account will remain inactive until an administrator
-                  reviews and approves your registration.
+                  reviews and approves your registration. Your selected
+                  department will be assigned after approval.
                 </div>
 
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={
+                    loading ||
+                    departmentsLoading ||
+                    departments.length === 0
+                  }
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {loading ? (
