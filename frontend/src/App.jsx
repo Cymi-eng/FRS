@@ -30,6 +30,9 @@ import DepartmentsPage from "./pages/Departments";
 import ApprovalsPage from "./pages/Approvals";
 import UsersPage from "./pages/Users";
 import MembersPage from "./pages/Members";
+import NotificationsPage, {
+  NotificationBell,
+} from "./components/NotificationCenter";
 
 function getItems(data) {
   if (Array.isArray(data)) return data;
@@ -163,7 +166,11 @@ function Sidebar({ active, setActive, open, setOpen, user, onLogout }) {
             </div>
           </div>
 
-          <button className="lg:hidden" onClick={() => setOpen(false)}>
+          <button
+            type="button"
+            className="lg:hidden"
+            onClick={() => setOpen(false)}
+          >
             <X size={20} />
           </button>
         </div>
@@ -987,7 +994,7 @@ export default function App({ user, onLogout }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-5">
+          <div className="flex items-center gap-2 sm:gap-5">
             <div className="hidden items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 md:flex">
               <Search size={16} className="text-slate-400" />
               <input
@@ -995,6 +1002,8 @@ export default function App({ user, onLogout }) {
                 className="w-36 border-0 bg-transparent text-sm outline-none placeholder:text-slate-400"
               />
             </div>
+
+            <NotificationBell onNavigate={handleNavigate} />
 
             <div className="flex items-center gap-2 border-l border-slate-200 pl-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-sm font-bold text-indigo-700">
@@ -1072,13 +1081,16 @@ export default function App({ user, onLogout }) {
             <ApprovalsPage />
           )}
 
+          {active === "Notifications" && <NotificationsPage />}
+
           {active !== "Overview" &&
             active !== "Activities" &&
             active !== "Reports" &&
             active !== "Departments" &&
             active !== "Users" &&
             active !== "Members" &&
-            active !== "Account Approvals" && (
+            active !== "Account Approvals" &&
+            active !== "Notifications" && (
               <PlaceholderPage title={active} description={pageDescription} />
             )}
         </main>
