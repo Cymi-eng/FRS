@@ -1,4 +1,3 @@
-
 import calendar
 import os
 import zipfile
@@ -9,7 +8,7 @@ from io import BytesIO
 from PIL import Image, UnidentifiedImageError
 
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -51,6 +50,10 @@ ALLOWED_EXTENSIONS = {
 }
 
 
+# --------------------------------------------------------------------------
+# Role helpers
+# --------------------------------------------------------------------------
+
 def is_admin(user):
     return user.is_authenticated and (
         user.is_superuser or user.role == "ADMIN"
@@ -67,6 +70,49 @@ def is_department_leader(user):
 
 def user_department(user):
     return user.led_departments.filter(is_active=True).first()
+
+
+# --------------------------------------------------------------------------
+# Input helpers
+# --------------------------------------------------------------------------
+
+def parse_date_or_error(value, field):
+    """parse_date returns None for badly formatted input but raises
+    ValueError for well-formatted impossible dates (e.g. 2025-13-45)."""
+
+    try:
+        parsed = parse_date(value)
+    except ValueError:
+        parsed = None
+
+    if not parsed:
+        raise ValidationError({
+            field: "Enter a valid date in YYYY-MM-DD format."
+        })
+
+    return parsed
+
+
+def parse_int_or_error(value, field):
+    """Assumes integer primary keys. Remove/adjust if you use UUIDs."""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValidationError({
+            field: "Invalid value."
+        })
+
+
+def get_comment(request):
+    """Safely read a text comment (handles missing, null or non-string)."""
+
+    value = request.data.get("comment")
+
+    if value is None:
+        return ""
+
+    return str(value).strip()
 
 
 def get_reporting_period(period_type, selected_date):
@@ -121,27 +167,34 @@ def validate_uploaded_file(uploaded_file):
     uploaded_file.seek(0)
 
     if extension in {".jpg", ".jpeg", ".png", ".webp"}:
+        expected_formats = {
+            ".jpg": {"JPEG"},
+            ".jpeg": {"JPEG"},
+            ".png": {"PNG"},
+            ".webp": {"WEBP"},
+        }
+
         try:
             image = Image.open(BytesIO(content))
             image.verify()
+            image_format = image.format
 
-            expected_formats = {
-                ".jpg": {"JPEG"},
-                ".jpeg": {"JPEG"},
-                ".png": {"PNG"},
-                ".webp": {"WEBP"},
-            }
-
-            if image.format not in expected_formats[extension]:
-                raise ValidationError({
-                    "file": (
-                        "The image content does not match its file extension."
-                    )
-                })
-
-        except (UnidentifiedImageError, OSError):
+        except (
+            UnidentifiedImageError,
+            OSError,
+            SyntaxError,
+            ValueError,
+            Image.DecompressionBombError,
+        ):
             raise ValidationError({
                 "file": "The uploaded image is invalid or corrupted."
+            })
+
+        if image_format not in expected_formats[extension]:
+            raise ValidationError({
+                "file": (
+                    "The image content does not match its file extension."
+                )
             })
 
     elif extension == ".pdf":
@@ -153,12 +206,13 @@ def validate_uploaded_file(uploaded_file):
     elif extension == ".docx":
         try:
             with zipfile.ZipFile(BytesIO(content)) as archive:
-                if "word/document.xml" not in archive.namelist():
-                    raise ValidationError({
-                        "file": "The uploaded DOCX document is invalid."
-                    })
-
+                names = archive.namelist()
         except zipfile.BadZipFile:
+            raise ValidationError({
+                "file": "The uploaded DOCX document is invalid."
+            })
+
+        if "word/document.xml" not in names:
             raise ValidationError({
                 "file": "The uploaded DOCX document is invalid."
             })
@@ -189,6 +243,8 @@ def build_report_snapshot(report, activities):
                 "uploaded_at": attachment.uploaded_at.isoformat(),
             })
 
+        expenditure = activity.expenditure_amount or Decimal("0.00")
+
         activity_snapshots.append({
             "id": activity.id,
             "activity_type": activity.activity_type,
@@ -197,13 +253,13 @@ def build_report_snapshot(report, activities):
             "activity_date": activity.activity_date.isoformat(),
             "location": activity.location,
             "description": activity.description,
-            "attendance_count": activity.attendance_count,
+            "attendance_count": activity.attendance_count or 0,
             "outcomes": activity.outcomes,
             "challenges": activity.challenges,
             "includes_financial_information": (
                 activity.includes_financial_information
             ),
-            "expenditure_amount": str(activity.expenditure_amount),
+            "expenditure_amount": str(expenditure),
             "financial_notes": activity.financial_notes,
             "created_by": (
                 activity.created_by.get_full_name()
@@ -215,12 +271,12 @@ def build_report_snapshot(report, activities):
         })
 
     total_attendance = sum(
-        activity.attendance_count for activity in activities
+        (activity.attendance_count or 0) for activity in activities
     )
 
     total_expenditure = sum(
         (
-            activity.expenditure_amount
+            (activity.expenditure_amount or Decimal("0.00"))
             for activity in activities
             if activity.includes_financial_information
         ),
@@ -263,6 +319,10 @@ def build_report_snapshot(report, activities):
     }
 
 
+# --------------------------------------------------------------------------
+# Activities
+# --------------------------------------------------------------------------
+
 class ActivityViewSet(viewsets.ModelViewSet):
     serializer_class = ActivitySerializer
     permission_classes = [IsAuthenticated]
@@ -296,7 +356,10 @@ class ActivityViewSet(viewsets.ModelViewSet):
 
         if department_id and (is_admin(user) or is_secretary(user)):
             queryset = queryset.filter(
-                department_id=department_id
+                department_id=parse_int_or_error(
+                    department_id,
+                    "department",
+                )
             )
 
         if activity_type:
@@ -305,27 +368,19 @@ class ActivityViewSet(viewsets.ModelViewSet):
             )
 
         if start_date:
-            parsed_start = parse_date(start_date)
-
-            if not parsed_start:
-                raise ValidationError({
-                    "start_date": "Use YYYY-MM-DD format."
-                })
-
             queryset = queryset.filter(
-                activity_date__gte=parsed_start
+                activity_date__gte=parse_date_or_error(
+                    start_date,
+                    "start_date",
+                )
             )
 
         if end_date:
-            parsed_end = parse_date(end_date)
-
-            if not parsed_end:
-                raise ValidationError({
-                    "end_date": "Use YYYY-MM-DD format."
-                })
-
             queryset = queryset.filter(
-                activity_date__lte=parsed_end
+                activity_date__lte=parse_date_or_error(
+                    end_date,
+                    "end_date",
+                )
             )
 
         return queryset
@@ -362,7 +417,7 @@ class ActivityViewSet(viewsets.ModelViewSet):
 
             department = get_object_or_404(
                 Department,
-                pk=department_id,
+                pk=parse_int_or_error(department_id, "department"),
                 is_active=True,
             )
 
@@ -402,6 +457,10 @@ class ActivityViewSet(viewsets.ModelViewSet):
             "Activities cannot be permanently deleted. Contact an administrator."
         )
 
+
+# --------------------------------------------------------------------------
+# Attachments
+# --------------------------------------------------------------------------
 
 class ActivityAttachmentViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityAttachmentSerializer
@@ -456,7 +515,10 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        activity_id = self.request.data.get("activity")
+        activity_id = parse_int_or_error(
+            self.request.data.get("activity"),
+            "activity",
+        )
 
         activity = get_object_or_404(
             Activity.objects.select_related("department"),
@@ -498,6 +560,7 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
             uploaded_by=user,
         )
 
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         attachment = self.get_object()
 
@@ -529,13 +592,26 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
                 "This attachment is part of a submitted report and cannot be deleted."
             )
 
-        attachment.file.delete(save=False)
+        # Delete the DB row first; remove the file only once the
+        # transaction has actually committed.
+        storage = attachment.file.storage
+        file_name = attachment.file.name
+
         attachment.delete()
+
+        if file_name:
+            transaction.on_commit(
+                lambda: storage.delete(file_name)
+            )
 
         return Response(
             status=status.HTTP_204_NO_CONTENT
         )
 
+
+# --------------------------------------------------------------------------
+# Reports
+# --------------------------------------------------------------------------
 
 class ReportSubmissionViewSet(viewsets.ModelViewSet):
     serializer_class = ReportSubmissionSerializer
@@ -568,7 +644,9 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "request_changes",
             "approve",
         }:
-            queryset = queryset.select_for_update()
+            # Lock only the report row. Without of=("self",), PostgreSQL
+            # fails because "reviewer" is a nullable (outer-joined) relation.
+            queryset = queryset.select_for_update(of=("self",))
 
         if is_admin(user) or is_secretary(user):
             return queryset
@@ -658,9 +736,9 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "This report cannot be submitted in its current state."
             )
 
-        # Lock the activity records while creating the snapshot.
+        # Lock the activity rows while creating the snapshot.
         activities = list(
-            report.activities.select_for_update()
+            report.activities.select_for_update(of=("self",))
             .select_related(
                 "department",
                 "created_by",
@@ -703,11 +781,13 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             activities,
         )
 
+        now = timezone.now()
+
         report.compiled_snapshot = snapshot
-        report.snapshot_created_at = timezone.now()
+        report.snapshot_created_at = now
 
         report.status = ReportSubmission.Status.SUBMITTED
-        report.submitted_at = timezone.now()
+        report.submitted_at = now
         report.reviewed_at = None
         report.reviewer = None
         report.review_comment = ""
@@ -723,13 +803,15 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
 
+        resubmitted = (
+            previous_status
+            == ReportSubmission.Status.CHANGES_REQUESTED
+        )
+
         transaction.on_commit(
             lambda: notify_secretaries(
                 report,
-                resubmitted=(
-                    previous_status
-                    == ReportSubmission.Status.CHANGES_REQUESTED
-                ),
+                resubmitted=resubmitted,
             )
         )
 
@@ -785,7 +867,7 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "This report cannot be returned for corrections."
             )
 
-        comment = request.data.get("comment", "").strip()
+        comment = get_comment(request)
 
         if not comment:
             raise ValidationError({
@@ -834,10 +916,7 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
         report.status = ReportSubmission.Status.APPROVED
         report.reviewer = request.user
         report.reviewed_at = timezone.now()
-        report.review_comment = request.data.get(
-            "comment",
-            "",
-        ).strip()
+        report.review_comment = get_comment(request)
 
         report.save(update_fields=[
             "status",
@@ -855,6 +934,10 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             self.get_serializer(report).data
         )
 
+
+# --------------------------------------------------------------------------
+# Summary
+# --------------------------------------------------------------------------
 
 class ActivitySummaryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -875,9 +958,7 @@ class ActivitySummaryView(APIView):
             "MONTHLY",
         }:
             raise ValidationError({
-                "period_type": (
-                    "Choose DAILY, WEEKLY or MONTHLY."
-                )
+                "period_type": "Choose DAILY, WEEKLY or MONTHLY."
             })
 
         if not date_value:
@@ -885,12 +966,7 @@ class ActivitySummaryView(APIView):
                 "date": "Provide a date in YYYY-MM-DD format."
             })
 
-        selected_date = parse_date(date_value)
-
-        if not selected_date:
-            raise ValidationError({
-                "date": "Enter a valid date in YYYY-MM-DD format."
-            })
+        selected_date = parse_date_or_error(date_value, "date")
 
         start_date, end_date = get_reporting_period(
             period_type,
@@ -923,7 +999,10 @@ class ActivitySummaryView(APIView):
         elif is_admin(user) or is_secretary(user):
             if department_id:
                 queryset = queryset.filter(
-                    department_id=department_id
+                    department_id=parse_int_or_error(
+                        department_id,
+                        "department",
+                    )
                 )
 
         else:
@@ -931,16 +1010,25 @@ class ActivitySummaryView(APIView):
                 "You cannot view activity summaries."
             )
 
+        # Only count expenditure for activities flagged as financial, so the
+        # total matches the report snapshot calculation.
         totals = queryset.aggregate(
             attendance=Sum("attendance_count"),
-            expenditure=Sum("expenditure_amount"),
+            expenditure=Sum(
+                "expenditure_amount",
+                filter=Q(includes_financial_information=True),
+            ),
         )
 
-        serializer = ActivitySerializer(
+        activities = list(
             queryset.order_by(
                 "activity_date",
                 "created_at",
-            ),
+            )
+        )
+
+        serializer = ActivitySerializer(
+            activities,
             many=True,
             context={"request": request},
         )
@@ -949,8 +1037,8 @@ class ActivitySummaryView(APIView):
             "period_type": period_type,
             "start_date": start_date,
             "end_date": end_date,
-            "activity_count": queryset.count(),
+            "activity_count": len(activities),
             "total_attendance": totals["attendance"] or 0,
-            "total_expenditure": totals["expenditure"] or 0,
+            "total_expenditure": totals["expenditure"] or Decimal("0.00"),
             "activities": serializer.data,
         })
