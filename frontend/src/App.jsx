@@ -28,6 +28,9 @@ import {
 import api from "./services/api";
 import ActivitiesPage from "./pages/Activities";
 import ReportsPage from "./pages/Reports";
+import DepartmentsPage from "./pages/Departments";
+import ApprovalsPage from "./pages/Approvals";
+import UsersPage from "./pages/Users";
 
 function getItems(data) {
   if (Array.isArray(data)) return data;
@@ -129,6 +132,7 @@ function Sidebar({ active, setActive, open, setOpen, user, onLogout }) {
       ? [
           { label: "Departments", icon: Building2 },
           { label: "Users", icon: Users },
+          { label: "Account Approvals", icon: ShieldCheck },
         ]
       : []),
     { label: "Notifications", icon: Bell },
@@ -420,6 +424,13 @@ function AdminDashboard({
         </ActionButton>
         <ActionButton icon={Users} onClick={() => onNavigate("Users")}>
           Manage Users
+        </ActionButton>
+        <ActionButton
+          icon={ShieldCheck}
+          secondary
+          onClick={() => onNavigate("Account Approvals")}
+        >
+          Account Approvals
         </ActionButton>
       </PageHeading>
 
@@ -914,6 +925,7 @@ export default function App({ user, onLogout }) {
     const descriptions = {
       Departments: "Manage church departments and their assigned leaders.",
       Users: "Create and manage system accounts and role assignments.",
+      "Account Approvals": "Review and approve department leader registrations.",
       Notifications: "View important reporting and system notifications.",
       Settings: "Manage your account settings.",
     };
@@ -1021,9 +1033,22 @@ export default function App({ user, onLogout }) {
           {active === "Activities" && <ActivitiesPage user={user} />}
           {active === "Reports" && <ReportsPage user={user} />}
 
+          {active === "Departments" && role === "ADMIN" && (
+            <DepartmentsPage user={user} />
+          )}
+
+          {active === "Users" && role === "ADMIN" && <UsersPage />}
+
+          {active === "Account Approvals" && role === "ADMIN" && (
+            <ApprovalsPage />
+          )}
+
           {active !== "Overview" &&
             active !== "Activities" &&
-            active !== "Reports" && (
+            active !== "Reports" &&
+            active !== "Departments" &&
+            active !== "Users" &&
+            active !== "Account Approvals" && (
               <PlaceholderPage title={active} description={pageDescription} />
             )}
         </main>

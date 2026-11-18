@@ -28,6 +28,69 @@ class UserProfileSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class UserRegistrationSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+        style={"input_type": "password"},
+    )
+
+    confirm_password = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+        style={"input_type": "password"},
+    )
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "username",
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "password",
+            "confirm_password",
+        )
+        read_only_fields = ("id",)
+
+    def validate_email(self, value):
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError(
+                "An account with this email already exists."
+            )
+        return value
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError({
+                "confirm_password": "Passwords do not match."
+            })
+
+        validate_password(attrs["password"])
+
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop("confirm_password")
+        password = validated_data.pop("password")
+
+        user = User(
+            **validated_data,
+            role=User.Role.DEPARTMENT_LEADER,
+            is_active=False,
+            approval_status=User.ApprovalStatus.PENDING,
+            is_staff=False,
+            is_superuser=False,
+        )
+
+        user.set_password(password)
+        user.save()
+
+        return user
+
+
 class UserManagementSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True,
@@ -54,8 +117,9 @@ class UserManagementSerializer(serializers.ModelSerializer):
             "role_display",
             "password",
             "is_active",
+            "approval_status",
         )
-        read_only_fields = ("id", "role_display")
+        read_only_fields = ("id", "role_display", "approval_status")
 
     def validate_password(self, value):
         validate_password(value, user=self.instance)

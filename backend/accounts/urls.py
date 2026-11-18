@@ -5,6 +5,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     CurrentUserView,
+    LeaderRegistrationView,
     PasswordChangeView,
     UserManagementViewSet,
 )
@@ -20,6 +21,11 @@ router.register(
 
 
 urlpatterns = [
+    path(
+        "register/",
+        LeaderRegistrationView.as_view(),
+        name="leader-registration",
+    ),
     path("me/", CurrentUserView.as_view(), name="current-user"),
     path(
         "change-password/",

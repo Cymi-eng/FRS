@@ -6,12 +6,15 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.generics import CreateAPIView
+from rest_framework.permissions import AllowAny
 
 from .models import User
 from .serializers import (
     PasswordChangeSerializer,
     UserManagementSerializer,
     UserProfileSerializer,
+    UserRegistrationSerializer,
 )
 
 
@@ -29,6 +32,16 @@ class IsSystemAdministrator(permissions.BasePermission):
             and user.is_active
             and (user.is_superuser or user.role == User.Role.ADMIN)
         )
+
+
+class LeaderRegistrationView(CreateAPIView):
+    """
+    Public registration for Department Leaders.
+    Every new account requires administrator approval.
+    """
+
+    serializer_class = UserRegistrationSerializer
+    permission_classes = [AllowAny]
 
 
 class CurrentUserView(APIView):
@@ -103,6 +116,72 @@ class UserManagementViewSet(viewsets.ModelViewSet):
 
         instance.delete()
 
+    @action(detail=False, methods=["get"], url_path="pending-approvals")
+    def pending_approvals(self, request):
+        pending_users = self.get_queryset().filter(
+            role=User.Role.DEPARTMENT_LEADER,
+            approval_status=User.ApprovalStatus.PENDING,
+            is_active=False,
+        ).order_by("date_joined")
+
+        serializer = self.get_serializer(pending_users, many=True)
+
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        user = self.get_object()
+
+        if user.role != User.Role.DEPARTMENT_LEADER:
+            return Response(
+                {"detail": "Only Department Leader accounts can be approved here."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if user.approval_status != User.ApprovalStatus.PENDING:
+            return Response(
+                {"detail": "This account is not awaiting approval."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.approval_status = User.ApprovalStatus.APPROVED
+        user.is_active = True
+        user.save(update_fields=["approval_status", "is_active"])
+
+        return Response({
+            "detail": f"Account for {user.username} approved successfully.",
+            "username": user.username,
+            "approval_status": user.approval_status,
+            "is_active": user.is_active,
+        })
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        user = self.get_object()
+
+        if user.role != User.Role.DEPARTMENT_LEADER:
+            return Response(
+                {"detail": "Only Department Leader accounts can be rejected here."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if user.approval_status != User.ApprovalStatus.PENDING:
+            return Response(
+                {"detail": "This account is not awaiting approval."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.approval_status = User.ApprovalStatus.REJECTED
+        user.is_active = False
+        user.save(update_fields=["approval_status", "is_active"])
+
+        return Response({
+            "detail": f"Account request for {user.username} rejected.",
+            "username": user.username,
+            "approval_status": user.approval_status,
+            "is_active": user.is_active,
+        })
+
     @action(detail=True, methods=["post"])
     def deactivate(self, request, pk=None):
         user = self.get_object()
@@ -131,6 +210,18 @@ class UserManagementViewSet(viewsets.ModelViewSet):
         if user.is_superuser:
             raise PermissionDenied(
                 "Superuser accounts cannot be modified here."
+            )
+
+        if user.approval_status == User.ApprovalStatus.PENDING:
+            return Response(
+                {"detail": "Approve this account through the approval endpoint."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if user.approval_status == User.ApprovalStatus.REJECTED:
+            return Response(
+                {"detail": "Rejected accounts cannot be activated."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         user.is_active = True

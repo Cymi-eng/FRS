@@ -9,6 +9,11 @@ class User(AbstractUser):
         SECRETARY = "SECRETARY", "Secretary"
         DEPARTMENT_LEADER = "DEPARTMENT_LEADER", "Department Leader"
 
+    class ApprovalStatus(models.TextChoices):
+        PENDING = "PENDING", "Pending Approval"
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+
     role = models.CharField(
         max_length=30,
         choices=Role.choices,
@@ -22,5 +27,14 @@ class User(AbstractUser):
 
     is_active = models.BooleanField(default=True)
 
+    approval_status = models.CharField(
+        max_length=20,
+        choices=ApprovalStatus.choices,
+        default=ApprovalStatus.APPROVED,
+    )
+
     def __str__(self):
-        return f"{self.get_full_name() or self.username} ({self.get_role_display()})"
+        return (
+            f"{self.get_full_name() or self.username} "
+            f"({self.get_role_display()})"
+        )
