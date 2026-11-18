@@ -1,7 +1,6 @@
 
 import { useEffect, useState } from "react";
 import {
-  Church,
   LockKeyhole,
   UserRound,
   Mail,
@@ -211,7 +210,7 @@ export default function Login({ onLogin }) {
         <div className="hidden flex-col justify-between bg-indigo-950 p-10 text-white lg:flex">
           <div>
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10">
-              <Church size={30} />
+              <img src="/app-icon.png" alt="Moi University Main Altar" className="h-8 w-8 object-contain" />
             </div>
 
             <h1 className="mt-8 text-3xl font-bold leading-tight">
@@ -258,7 +257,7 @@ export default function Login({ onLogin }) {
           <div className="w-full max-w-md">
             <div className="mb-8 text-center lg:text-left">
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700 lg:hidden">
-                <Church size={28} />
+                <img src="/app-icon.png" alt="Moi University Main Altar" className="h-8 w-8 object-contain" />
               </div>
 
               <h2 className="mt-4 text-2xl font-bold text-slate-900">

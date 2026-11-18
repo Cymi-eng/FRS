@@ -38,7 +38,9 @@ class NotificationUnreadCountView(APIView):
             is_read=False,
         ).count()
 
-        return Response({"unread_count": count})
+        return Response({
+            "unread_count": count,
+        })
 
 
 class NotificationMarkReadView(APIView):
@@ -59,7 +61,10 @@ class NotificationMarkReadView(APIView):
         if not notification.is_read:
             notification.is_read = True
             notification.read_at = timezone.now()
-            notification.save(update_fields=["is_read", "read_at"])
+
+            notification.save(
+                update_fields=["is_read", "read_at"]
+            )
 
         return Response(
             NotificationSerializer(notification).data
@@ -80,4 +85,17 @@ class NotificationMarkAllReadView(APIView):
             read_at=now,
         )
 
-        return Response({"marked_read": updated})
+        return Response({
+            "marked_read": updated,
+        })
+
+
+class NotificationDeleteView(generics.DestroyAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = NotificationSerializer
+    lookup_field = "pk"
+
+    def get_queryset(self):
+        return Notification.objects.filter(
+            recipient=self.request.user
+        )

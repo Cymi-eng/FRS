@@ -3,6 +3,7 @@ import calendar
 import os
 import zipfile
 from datetime import timedelta
+from decimal import Decimal
 from io import BytesIO
 
 from PIL import Image, UnidentifiedImageError
@@ -22,6 +23,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from departments.models import Department
+
 from notifications.services import (
     notify_secretaries,
     notify_report_changes_requested,
@@ -29,6 +31,7 @@ from notifications.services import (
 )
 
 from .models import Activity, ActivityAttachment, ReportSubmission
+
 from .serializers import (
     ActivitySerializer,
     ActivityAttachmentSerializer,
@@ -39,7 +42,12 @@ from .serializers import (
 MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".webp", ".pdf", ".docx"
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".pdf",
+    ".docx",
 }
 
 
@@ -61,6 +69,36 @@ def user_department(user):
     return user.led_departments.filter(is_active=True).first()
 
 
+def get_reporting_period(period_type, selected_date):
+    """Calculate daily, weekly or monthly reporting dates."""
+
+    if period_type == "DAILY":
+        return selected_date, selected_date
+
+    if period_type == "WEEKLY":
+        start_date = selected_date - timedelta(
+            days=selected_date.weekday()
+        )
+        end_date = start_date + timedelta(days=6)
+        return start_date, end_date
+
+    if period_type == "MONTHLY":
+        start_date = selected_date.replace(day=1)
+
+        last_day = calendar.monthrange(
+            selected_date.year,
+            selected_date.month,
+        )[1]
+
+        end_date = selected_date.replace(day=last_day)
+
+        return start_date, end_date
+
+    raise ValidationError({
+        "period_type": "Choose DAILY, WEEKLY or MONTHLY."
+    })
+
+
 def validate_uploaded_file(uploaded_file):
     """Validate attachment size, extension and basic file structure."""
 
@@ -73,7 +111,9 @@ def validate_uploaded_file(uploaded_file):
 
     if extension not in ALLOWED_EXTENSIONS:
         raise ValidationError({
-            "file": "Only JPG, JPEG, PNG, WEBP, PDF and DOCX files are allowed."
+            "file": (
+                "Only JPG, JPEG, PNG, WEBP, PDF and DOCX files are allowed."
+            )
         })
 
     uploaded_file.seek(0)
@@ -94,7 +134,9 @@ def validate_uploaded_file(uploaded_file):
 
             if image.format not in expected_formats[extension]:
                 raise ValidationError({
-                    "file": "The image content does not match its file extension."
+                    "file": (
+                        "The image content does not match its file extension."
+                    )
                 })
 
         except (UnidentifiedImageError, OSError):
@@ -115,12 +157,110 @@ def validate_uploaded_file(uploaded_file):
                     raise ValidationError({
                         "file": "The uploaded DOCX document is invalid."
                     })
+
         except zipfile.BadZipFile:
             raise ValidationError({
                 "file": "The uploaded DOCX document is invalid."
             })
 
     uploaded_file.seek(0)
+
+
+def build_report_snapshot(report, activities):
+    """
+    Create a JSON-safe historical copy of report content.
+
+    This snapshot is independent of future edits to Activity records.
+    """
+
+    activity_snapshots = []
+
+    for activity in activities:
+        attachment_snapshots = []
+
+        for attachment in activity.attachments.all():
+            attachment_snapshots.append({
+                "id": attachment.id,
+                "file_name": os.path.basename(attachment.file.name),
+                "file_path": attachment.file.name,
+                "caption": attachment.caption,
+                "uploaded_by": attachment.uploaded_by.get_full_name()
+                or attachment.uploaded_by.username,
+                "uploaded_at": attachment.uploaded_at.isoformat(),
+            })
+
+        activity_snapshots.append({
+            "id": activity.id,
+            "activity_type": activity.activity_type,
+            "activity_type_display": activity.get_activity_type_display(),
+            "title": activity.title,
+            "activity_date": activity.activity_date.isoformat(),
+            "location": activity.location,
+            "description": activity.description,
+            "attendance_count": activity.attendance_count,
+            "outcomes": activity.outcomes,
+            "challenges": activity.challenges,
+            "includes_financial_information": (
+                activity.includes_financial_information
+            ),
+            "expenditure_amount": str(activity.expenditure_amount),
+            "financial_notes": activity.financial_notes,
+            "created_by": (
+                activity.created_by.get_full_name()
+                or activity.created_by.username
+            ),
+            "created_at": activity.created_at.isoformat(),
+            "updated_at": activity.updated_at.isoformat(),
+            "attachments": attachment_snapshots,
+        })
+
+    total_attendance = sum(
+        activity.attendance_count for activity in activities
+    )
+
+    total_expenditure = sum(
+        (
+            activity.expenditure_amount
+            for activity in activities
+            if activity.includes_financial_information
+        ),
+        Decimal("0.00"),
+    )
+
+    return {
+        "snapshot_version": 1,
+        "generated_at": timezone.now().isoformat(),
+        "department": {
+            "id": report.department_id,
+            "name": report.department.name,
+            "code": report.department.code,
+        },
+        "report": {
+            "id": report.id,
+            "title": report.title,
+            "period_type": report.period_type,
+            "period_type_display": report.get_period_type_display(),
+            "start_date": report.start_date.isoformat(),
+            "end_date": report.end_date.isoformat(),
+            "executive_summary": report.executive_summary,
+            "achievements": report.achievements,
+            "challenges": report.challenges,
+            "recommendations": report.recommendations,
+            "plans_for_next_period": report.plans_for_next_period,
+            "general_remarks": report.general_remarks,
+            "includes_financial_report": report.includes_financial_report,
+            "financial_summary": report.financial_summary,
+            "total_expenditure": str(report.total_expenditure),
+        },
+        "prepared_by": (
+            report.created_by.get_full_name()
+            or report.created_by.username
+        ),
+        "activity_count": len(activity_snapshots),
+        "total_attendance": total_attendance,
+        "calculated_activity_expenditure": str(total_expenditure),
+        "activities": activity_snapshots,
+    }
 
 
 class ActivityViewSet(viewsets.ModelViewSet):
@@ -155,31 +295,46 @@ class ActivityViewSet(viewsets.ModelViewSet):
         end_date = self.request.query_params.get("end_date")
 
         if department_id and (is_admin(user) or is_secretary(user)):
-            queryset = queryset.filter(department_id=department_id)
+            queryset = queryset.filter(
+                department_id=department_id
+            )
 
         if activity_type:
-            queryset = queryset.filter(activity_type=activity_type)
+            queryset = queryset.filter(
+                activity_type=activity_type
+            )
 
         if start_date:
             parsed_start = parse_date(start_date)
+
             if not parsed_start:
                 raise ValidationError({
                     "start_date": "Use YYYY-MM-DD format."
                 })
-            queryset = queryset.filter(activity_date__gte=parsed_start)
+
+            queryset = queryset.filter(
+                activity_date__gte=parsed_start
+            )
 
         if end_date:
             parsed_end = parse_date(end_date)
+
             if not parsed_end:
                 raise ValidationError({
                     "end_date": "Use YYYY-MM-DD format."
                 })
-            queryset = queryset.filter(activity_date__lte=parsed_end)
+
+            queryset = queryset.filter(
+                activity_date__lte=parsed_end
+            )
 
         return queryset
 
     def create(self, request, *args, **kwargs):
-        if not (is_admin(request.user) or is_department_leader(request.user)):
+        if not (
+            is_admin(request.user)
+            or is_department_leader(request.user)
+        ):
             raise PermissionDenied(
                 "Only administrators and department leaders can record activities."
             )
@@ -212,7 +367,9 @@ class ActivityViewSet(viewsets.ModelViewSet):
             )
 
         else:
-            raise PermissionDenied("You cannot record activities.")
+            raise PermissionDenied(
+                "You cannot record activities."
+            )
 
         serializer.save(
             department=department,
@@ -229,7 +386,9 @@ class ActivityViewSet(viewsets.ModelViewSet):
                 )
 
         elif not is_admin(request.user):
-            raise PermissionDenied("You cannot edit this activity.")
+            raise PermissionDenied(
+                "You cannot edit this activity."
+            )
 
         if activity.is_archived:
             raise PermissionDenied(
@@ -247,9 +406,20 @@ class ActivityViewSet(viewsets.ModelViewSet):
 class ActivityAttachmentViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityAttachmentSerializer
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-    http_method_names = ["get", "post", "delete", "head", "options"]
+    parser_classes = [
+        MultiPartParser,
+        FormParser,
+        JSONParser,
+    ]
+
+    http_method_names = [
+        "get",
+        "post",
+        "delete",
+        "head",
+        "options",
+    ]
 
     def get_queryset(self):
         user = self.request.user
@@ -274,7 +444,10 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
         return queryset.none()
 
     def create(self, request, *args, **kwargs):
-        if not (is_admin(request.user) or is_department_leader(request.user)):
+        if not (
+            is_admin(request.user)
+            or is_department_leader(request.user)
+        ):
             raise PermissionDenied(
                 "Only administrators and department leaders can upload attachments."
             )
@@ -293,7 +466,10 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
         if is_department_leader(user):
             department = user_department(user)
 
-            if not department or activity.department_id != department.id:
+            if (
+                not department
+                or activity.department_id != department.id
+            ):
                 raise PermissionDenied(
                     "You cannot upload files to another department's activity."
                 )
@@ -336,10 +512,29 @@ class ActivityAttachmentViewSet(viewsets.ModelViewSet):
                 "You cannot delete attachments."
             )
 
+        # Preserve evidence referenced by a previously submitted report.
+        protected_statuses = [
+            ReportSubmission.Status.SUBMITTED,
+            ReportSubmission.Status.UNDER_REVIEW,
+            ReportSubmission.Status.CHANGES_REQUESTED,
+            ReportSubmission.Status.APPROVED,
+        ]
+
+        has_submitted_report = attachment.activity.report_submissions.filter(
+            status__in=protected_statuses
+        ).exists()
+
+        if has_submitted_report:
+            raise PermissionDenied(
+                "This attachment is part of a submitted report and cannot be deleted."
+            )
+
         attachment.file.delete(save=False)
         attachment.delete()
 
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            status=status.HTTP_204_NO_CONTENT
+        )
 
 
 class ReportSubmissionViewSet(viewsets.ModelViewSet):
@@ -347,7 +542,12 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     http_method_names = [
-        "get", "post", "put", "patch", "head", "options"
+        "get",
+        "post",
+        "put",
+        "patch",
+        "head",
+        "options",
     ]
 
     def get_queryset(self):
@@ -377,7 +577,9 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             department = user_department(user)
 
             if department:
-                return queryset.filter(department=department)
+                return queryset.filter(
+                    department=department
+                )
 
         return queryset.none()
 
@@ -398,22 +600,10 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "Your account has no active department assignment."
             )
 
-        report = serializer.save(
+        serializer.save(
             department=department,
             created_by=self.request.user,
         )
-
-        # Automatically group activities in the reporting period
-        # when the leader has not selected specific activities.
-        if not report.activities.exists():
-            matching_activities = Activity.objects.filter(
-                department=department,
-                activity_date__gte=report.start_date,
-                activity_date__lte=report.end_date,
-                is_archived=False,
-            )
-
-            report.activities.set(matching_activities)
 
     def update(self, request, *args, **kwargs):
         report = self.get_object()
@@ -468,10 +658,53 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
                 "This report cannot be submitted in its current state."
             )
 
-        if not report.activities.exists():
+        # Lock the activity records while creating the snapshot.
+        activities = list(
+            report.activities.select_for_update()
+            .select_related(
+                "department",
+                "created_by",
+            )
+            .prefetch_related(
+                "attachments",
+                "attachments__uploaded_by",
+            )
+            .order_by("activity_date", "created_at")
+        )
+
+        if not activities:
             raise ValidationError(
                 "A report must contain at least one activity."
             )
+
+        for activity in activities:
+            if activity.department_id != report.department_id:
+                raise ValidationError(
+                    "The report contains an activity from another department."
+                )
+
+            if not (
+                report.start_date
+                <= activity.activity_date
+                <= report.end_date
+            ):
+                raise ValidationError(
+                    "The report contains an activity outside its reporting period."
+                )
+
+            if activity.is_archived:
+                raise ValidationError(
+                    "The report contains an archived activity. Remove it before submission."
+                )
+
+        # Generate a fresh snapshot on initial submission or resubmission.
+        snapshot = build_report_snapshot(
+            report,
+            activities,
+        )
+
+        report.compiled_snapshot = snapshot
+        report.snapshot_created_at = timezone.now()
 
         report.status = ReportSubmission.Status.SUBMITTED
         report.submitted_at = timezone.now()
@@ -480,6 +713,8 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
         report.review_comment = ""
 
         report.save(update_fields=[
+            "compiled_snapshot",
+            "snapshot_created_at",
             "status",
             "submitted_at",
             "reviewed_at",
@@ -488,16 +723,19 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
 
-        # Notify Secretaries after a successful submission.
-        # A correction-requested report counts as a resubmission.
-        notify_secretaries(
-            report,
-            resubmitted=(
-                previous_status == ReportSubmission.Status.CHANGES_REQUESTED
-            ),
+        transaction.on_commit(
+            lambda: notify_secretaries(
+                report,
+                resubmitted=(
+                    previous_status
+                    == ReportSubmission.Status.CHANGES_REQUESTED
+                ),
+            )
         )
 
-        return Response(self.get_serializer(report).data)
+        return Response(
+            self.get_serializer(report).data
+        )
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
@@ -525,7 +763,9 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
 
-        return Response(self.get_serializer(report).data)
+        return Response(
+            self.get_serializer(report).data
+        )
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
@@ -565,10 +805,13 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
 
-        # Notify the department leader about the corrections.
-        notify_report_changes_requested(report)
+        transaction.on_commit(
+            lambda: notify_report_changes_requested(report)
+        )
 
-        return Response(self.get_serializer(report).data)
+        return Response(
+            self.get_serializer(report).data
+        )
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
@@ -591,7 +834,10 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
         report.status = ReportSubmission.Status.APPROVED
         report.reviewer = request.user
         report.reviewed_at = timezone.now()
-        report.review_comment = request.data.get("comment", "").strip()
+        report.review_comment = request.data.get(
+            "comment",
+            "",
+        ).strip()
 
         report.save(update_fields=[
             "status",
@@ -601,10 +847,13 @@ class ReportSubmissionViewSet(viewsets.ModelViewSet):
             "updated_at",
         ])
 
-        # Notify the department leader about the approval.
-        notify_report_approved(report)
+        transaction.on_commit(
+            lambda: notify_report_approved(report)
+        )
 
-        return Response(self.get_serializer(report).data)
+        return Response(
+            self.get_serializer(report).data
+        )
 
 
 class ActivitySummaryView(APIView):
@@ -614,14 +863,21 @@ class ActivitySummaryView(APIView):
         user = request.user
 
         period_type = request.query_params.get(
-            "period_type", "WEEKLY"
+            "period_type",
+            "WEEKLY",
         ).upper()
 
         date_value = request.query_params.get("date")
 
-        if period_type not in {"WEEKLY", "MONTHLY"}:
+        if period_type not in {
+            "DAILY",
+            "WEEKLY",
+            "MONTHLY",
+        }:
             raise ValidationError({
-                "period_type": "Choose WEEKLY or MONTHLY."
+                "period_type": (
+                    "Choose DAILY, WEEKLY or MONTHLY."
+                )
             })
 
         if not date_value:
@@ -636,19 +892,10 @@ class ActivitySummaryView(APIView):
                 "date": "Enter a valid date in YYYY-MM-DD format."
             })
 
-        if period_type == "WEEKLY":
-            start_date = selected_date - timedelta(
-                days=selected_date.weekday()
-            )
-            end_date = start_date + timedelta(days=6)
-
-        else:
-            start_date = selected_date.replace(day=1)
-            last_day = calendar.monthrange(
-                selected_date.year,
-                selected_date.month,
-            )[1]
-            end_date = selected_date.replace(day=last_day)
+        start_date, end_date = get_reporting_period(
+            period_type,
+            selected_date,
+        )
 
         queryset = Activity.objects.filter(
             activity_date__gte=start_date,
@@ -669,11 +916,15 @@ class ActivitySummaryView(APIView):
                     "Your account has no active department assignment."
                 )
 
-            queryset = queryset.filter(department=department)
+            queryset = queryset.filter(
+                department=department
+            )
 
         elif is_admin(user) or is_secretary(user):
             if department_id:
-                queryset = queryset.filter(department_id=department_id)
+                queryset = queryset.filter(
+                    department_id=department_id
+                )
 
         else:
             raise PermissionDenied(
@@ -686,7 +937,10 @@ class ActivitySummaryView(APIView):
         )
 
         serializer = ActivitySerializer(
-            queryset.order_by("activity_date", "created_at"),
+            queryset.order_by(
+                "activity_date",
+                "created_at",
+            ),
             many=True,
             context={"request": request},
         )

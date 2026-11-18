@@ -1,4 +1,6 @@
 
+import calendar
+
 from rest_framework import serializers
 
 from .models import Activity, ActivityAttachment, ReportSubmission
@@ -83,7 +85,11 @@ class ActivitySerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         includes_finances = attrs.get(
             "includes_financial_information",
-            getattr(self.instance, "includes_financial_information", False),
+            getattr(
+                self.instance,
+                "includes_financial_information",
+                False,
+            ),
         )
 
         amount = attrs.get(
@@ -118,11 +124,22 @@ class ReportSubmissionSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
 
-    activities = ActivitySerializer(many=True, read_only=True)
+    period_type = serializers.ChoiceField(
+        choices=(
+            ("DAILY", "Daily"),
+            ("WEEKLY", "Weekly"),
+            ("MONTHLY", "Monthly"),
+        ),
+    )
+
+    activities = ActivitySerializer(
+        many=True,
+        read_only=True,
+    )
 
     activity_ids = serializers.PrimaryKeyRelatedField(
         many=True,
-        queryset=Activity.objects.all(),
+        queryset=Activity.objects.filter(is_archived=False),
         source="activities",
         write_only=True,
         required=False,
@@ -130,6 +147,7 @@ class ReportSubmissionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ReportSubmission
+
         fields = (
             "id",
             "department",
@@ -174,19 +192,21 @@ class ReportSubmissionSerializer(serializers.ModelSerializer):
         )
 
     def validate(self, attrs):
+        instance = self.instance
+
         period_type = attrs.get(
             "period_type",
-            getattr(self.instance, "period_type", None),
+            getattr(instance, "period_type", None),
         )
 
         start_date = attrs.get(
             "start_date",
-            getattr(self.instance, "start_date", None),
+            getattr(instance, "start_date", None),
         )
 
         end_date = attrs.get(
             "end_date",
-            getattr(self.instance, "end_date", None),
+            getattr(instance, "end_date", None),
         )
 
         if not start_date or not end_date:
@@ -199,7 +219,18 @@ class ReportSubmissionSerializer(serializers.ModelSerializer):
                 "end_date": "End date cannot be before start date."
             })
 
-        if period_type == ReportSubmission.PeriodType.WEEKLY:
+        # DAILY: exactly one calendar day.
+        if period_type == "DAILY":
+            if start_date != end_date:
+                raise serializers.ValidationError({
+                    "end_date": (
+                        "A daily report must cover exactly one day. "
+                        "Start date and end date must be identical."
+                    )
+                })
+
+        # WEEKLY: Monday to Sunday.
+        elif period_type == "WEEKLY":
             if start_date.weekday() != 0:
                 raise serializers.ValidationError({
                     "start_date": "Weekly reports must start on Monday."
@@ -207,56 +238,239 @@ class ReportSubmissionSerializer(serializers.ModelSerializer):
 
             if (end_date - start_date).days != 6:
                 raise serializers.ValidationError({
-                    "end_date": "Weekly reports must cover seven days."
+                    "end_date": "Weekly reports must cover exactly seven days."
                 })
 
-        elif period_type == ReportSubmission.PeriodType.MONTHLY:
-            import calendar
-
+        # MONTHLY: complete calendar month.
+        elif period_type == "MONTHLY":
             last_day = calendar.monthrange(
                 start_date.year,
                 start_date.month,
             )[1]
 
-            if (
-                start_date.day != 1
-                or end_date.year != start_date.year
-                or end_date.month != start_date.month
-                or end_date.day != last_day
-            ):
+            expected_end = start_date.replace(day=last_day)
+
+            if start_date.day != 1 or end_date != expected_end:
                 raise serializers.ValidationError(
                     "Monthly reports must cover a complete calendar month."
                 )
 
+        # Prevent changes to reports that are already submitted or approved.
+        if instance and instance.status in (
+            ReportSubmission.Status.SUBMITTED,
+            ReportSubmission.Status.UNDER_REVIEW,
+            ReportSubmission.Status.APPROVED,
+        ):
+            protected_fields = {
+                "period_type",
+                "start_date",
+                "end_date",
+                "title",
+                "executive_summary",
+                "achievements",
+                "challenges",
+                "recommendations",
+                "plans_for_next_period",
+                "includes_financial_report",
+                "financial_summary",
+                "total_expenditure",
+                "activities",
+            }
+
+            changed_fields = protected_fields.intersection(attrs.keys())
+
+            if changed_fields:
+                raise serializers.ValidationError(
+                    "This report cannot be edited in its current status."
+                )
+
         activities = attrs.get("activities")
 
-        if activities is not None:
-            request = self.context.get("request")
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
 
-            if request and request.user.role == "DEPARTMENT_LEADER":
-                department = request.user.led_departments.filter(
+        # Determine the department available to the current leader.
+        leader_department_id = None
+
+        if user and getattr(user, "role", None) == "DEPARTMENT_LEADER":
+            department = user.led_departments.filter(
+                is_active=True
+            ).first()
+
+            if not department:
+                raise serializers.ValidationError(
+                    "Your account has no active department assignment."
+                )
+
+            leader_department_id = department.id
+
+            if instance and instance.department_id != leader_department_id:
+                raise serializers.ValidationError(
+                    "You cannot manage reports belonging to another department."
+                )
+
+        # Validate manually selected activities.
+        if activities is not None:
+            for activity in activities:
+                if not start_date <= activity.activity_date <= end_date:
+                    raise serializers.ValidationError({
+                        "activity_ids": (
+                            "Every selected activity must fall within "
+                            "the report dates."
+                        )
+                    })
+
+                if leader_department_id and (
+                    activity.department_id != leader_department_id
+                ):
+                    raise serializers.ValidationError({
+                        "activity_ids": (
+                            "You can only include activities from "
+                            "your own department."
+                        )
+                    })
+
+            department_ids = {
+                activity.department_id for activity in activities
+            }
+
+            if len(department_ids) > 1:
+                raise serializers.ValidationError({
+                    "activity_ids": (
+                        "A report can only contain activities "
+                        "from one department."
+                    )
+                })
+
+        return attrs
+
+    def _validate_activity_selection(self, activities, department, start_date, end_date):
+        for activity in activities:
+            if activity.department_id != department.id:
+                raise serializers.ValidationError({
+                    "activity_ids": (
+                        "A report cannot include activities from another department."
+                    )
+                })
+
+            if not start_date <= activity.activity_date <= end_date:
+                raise serializers.ValidationError({
+                    "activity_ids": (
+                        "Every activity must fall within the report dates."
+                    )
+                })
+
+            if activity.is_archived:
+                raise serializers.ValidationError({
+                    "activity_ids": (
+                        "Archived activities cannot be included in a report."
+                    )
+                })
+
+    def create(self, validated_data):
+        activities_provided = "activities" in validated_data
+        selected_activities = validated_data.pop("activities", None)
+
+        department = validated_data.get("department")
+        start_date = validated_data["start_date"]
+        end_date = validated_data["end_date"]
+
+        if department is None:
+            request = self.context.get("request")
+            user = getattr(request, "user", None)
+
+            if user and getattr(user, "role", None) == "DEPARTMENT_LEADER":
+                department = user.led_departments.filter(
                     is_active=True
                 ).first()
 
-                if not department:
-                    raise serializers.ValidationError(
-                        "Your account has no active department assignment."
-                    )
+        if department is None:
+            raise serializers.ValidationError(
+                "A department must be assigned before creating a report."
+            )
 
-                for activity in activities:
-                    if activity.department_id != department.id:
-                        raise serializers.ValidationError({
-                            "activity_ids": (
-                                "You can only include activities from your "
-                                "own department."
-                            )
-                        })
+        if activities_provided:
+            activities = list(selected_activities)
+        else:
+            # Automatically compile all eligible activities
+            # for the selected department and reporting period.
+            activities = list(
+                Activity.objects.filter(
+                    department=department,
+                    activity_date__range=(start_date, end_date),
+                    is_archived=False,
+                ).order_by("activity_date", "created_at")
+            )
 
-                    if not start_date <= activity.activity_date <= end_date:
-                        raise serializers.ValidationError({
-                            "activity_ids": (
-                                "Every activity must fall within the report dates."
-                            )
-                        })
+        self._validate_activity_selection(
+            activities,
+            department,
+            start_date,
+            end_date,
+        )
 
-        return attrs
+        report = ReportSubmission.objects.create(
+            **validated_data,
+        )
+
+        report.activities.set(activities)
+
+        return report
+
+    def update(self, instance, validated_data):
+        activities_provided = "activities" in validated_data
+
+        selected_activities = validated_data.pop(
+            "activities",
+            None,
+        )
+
+        new_start_date = validated_data.get(
+            "start_date",
+            instance.start_date,
+        )
+
+        new_end_date = validated_data.get(
+            "end_date",
+            instance.end_date,
+        )
+
+        period_changed = (
+            new_start_date != instance.start_date
+            or new_end_date != instance.end_date
+        )
+
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+
+        instance.save()
+
+        if activities_provided:
+            activities = list(selected_activities)
+
+            self._validate_activity_selection(
+                activities,
+                instance.department,
+                instance.start_date,
+                instance.end_date,
+            )
+
+            instance.activities.set(activities)
+
+        elif period_changed:
+            # Recompile automatically if a draft's reporting
+            # period changes.
+            activities = list(
+                Activity.objects.filter(
+                    department=instance.department,
+                    activity_date__range=(
+                        instance.start_date,
+                        instance.end_date,
+                    ),
+                    is_archived=False,
+                ).order_by("activity_date", "created_at")
+            )
+
+            instance.activities.set(activities)
+
+        return instance

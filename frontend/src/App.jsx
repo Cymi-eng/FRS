@@ -16,7 +16,6 @@ import {
   CheckCircle2,
   AlertCircle,
   CalendarDays,
-  Church,
   LogOut,
   Activity,
   RefreshCw,
@@ -158,7 +157,7 @@ function Sidebar({ active, setActive, open, setOpen, user, onLogout }) {
         <div className="flex h-20 items-center justify-between border-b border-slate-100 px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-700 text-white">
-              <Church size={21} />
+              <img src="/app-icon.png" alt="Moi University Main Altar" className="h-8 w-8 object-contain" />
             </div>
             <div>
               <h1 className="text-sm font-bold text-slate-900">MAIN ALTAR</h1>

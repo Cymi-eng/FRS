@@ -11,6 +11,7 @@ from django.db.models import F, Q
 
 def activity_attachment_path(instance, filename):
     extension = filename.rsplit(".", 1)[-1].lower()
+
     return (
         f"reports/activities/{instance.activity_id}/"
         f"{uuid.uuid4().hex}.{extension}"
@@ -20,7 +21,9 @@ def activity_attachment_path(instance, filename):
 class Activity(models.Model):
     """
     An individual department activity recorded whenever it happens.
-    Activities are automatically grouped into weekly and monthly reports.
+
+    Activities are recorded independently and can later be compiled
+    into daily, weekly or monthly departmental reports.
     """
 
     class ActivityType(models.TextChoices):
@@ -59,18 +62,13 @@ class Activity(models.Model):
 
     description = models.TextField()
 
-    attendance_count = models.PositiveIntegerField(
-        default=0,
-    )
+    attendance_count = models.PositiveIntegerField(default=0)
 
     outcomes = models.TextField(blank=True)
 
     challenges = models.TextField(blank=True)
 
-    # Optional financial information.
-    includes_financial_information = models.BooleanField(
-        default=False,
-    )
+    includes_financial_information = models.BooleanField(default=False)
 
     expenditure_amount = models.DecimalField(
         max_digits=12,
@@ -89,6 +87,7 @@ class Activity(models.Model):
 
     class Meta:
         ordering = ["-activity_date", "-created_at"]
+
         indexes = [
             models.Index(
                 fields=["department", "activity_date"],
@@ -101,6 +100,8 @@ class Activity(models.Model):
         ]
 
     def clean(self):
+        super().clean()
+
         if not self.includes_financial_information:
             self.expenditure_amount = 0
             self.financial_notes = ""
@@ -143,13 +144,20 @@ class ActivityAttachment(models.Model):
 
 class ReportSubmission(models.Model):
     """
-    A weekly or monthly report compiled from a department's activities.
+    A departmental report compiled from activities.
 
-    Department leaders review and submit these reports manually.
-    The system does not automatically submit them.
+    Leaders can create and submit daily, weekly or monthly reports
+    whenever they are ready.
+
+    The system never automatically submits reports.
+
+    A compiled snapshot preserves the information included in a
+    submitted report so subsequent activity changes do not silently
+    alter the historical report.
     """
 
     class PeriodType(models.TextChoices):
+        DAILY = "DAILY", "Daily"
         WEEKLY = "WEEKLY", "Weekly"
         MONTHLY = "MONTHLY", "Monthly"
 
@@ -187,7 +195,6 @@ class ReportSubmission(models.Model):
 
     title = models.CharField(max_length=200, blank=True)
 
-    # Activities included in this submitted report.
     activities = models.ManyToManyField(
         Activity,
         related_name="report_submissions",
@@ -204,9 +211,9 @@ class ReportSubmission(models.Model):
 
     plans_for_next_period = models.TextField(blank=True)
 
-    includes_financial_report = models.BooleanField(
-        default=False,
-    )
+    general_remarks = models.TextField(blank=True)
+
+    includes_financial_report = models.BooleanField(default=False)
 
     financial_summary = models.TextField(blank=True)
 
@@ -215,6 +222,18 @@ class ReportSubmission(models.Model):
         decimal_places=2,
         default=0,
         validators=[MinValueValidator(0)],
+    )
+
+    # Historical copy of the activities and their supporting details.
+    # This is populated by the submission workflow, not by model save.
+    compiled_snapshot = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    snapshot_created_at = models.DateTimeField(
+        null=True,
+        blank=True,
     )
 
     status = models.CharField(
@@ -281,34 +300,54 @@ class ReportSubmission(models.Model):
     def clean(self):
         super().clean()
 
-        if self.end_date < self.start_date:
-            raise ValidationError({
-                "end_date": "End date cannot be before start date."
-            })
+        errors = {}
 
-        if self.period_type == self.PeriodType.WEEKLY:
-            if (self.end_date - self.start_date).days != 6:
-                raise ValidationError({
-                    "end_date": "A weekly report must cover exactly seven days."
-                })
-
-            if self.start_date.weekday() != 0:
-                raise ValidationError({
-                    "start_date": "Weekly reports must start on Monday."
-                })
-
-        elif self.period_type == self.PeriodType.MONTHLY:
-            last_day = calendar.monthrange(
-                self.start_date.year,
-                self.start_date.month,
-            )[1]
-
-            expected_end = self.start_date.replace(day=last_day)
-
-            if self.start_date.day != 1 or self.end_date != expected_end:
-                raise ValidationError(
-                    "Monthly reports must cover the complete calendar month."
+        if self.start_date and self.end_date:
+            if self.end_date < self.start_date:
+                errors["end_date"] = (
+                    "End date cannot be before start date."
                 )
+
+            elif self.period_type == self.PeriodType.DAILY:
+                if self.start_date != self.end_date:
+                    errors["end_date"] = (
+                        "A daily report must cover exactly one day."
+                    )
+
+            elif self.period_type == self.PeriodType.WEEKLY:
+                duration = (self.end_date - self.start_date).days
+
+                if duration != 6:
+                    errors["end_date"] = (
+                        "A weekly report must cover exactly seven days."
+                    )
+
+                if self.start_date.weekday() != 0:
+                    errors["start_date"] = (
+                        "Weekly reports must start on Monday."
+                    )
+
+            elif self.period_type == self.PeriodType.MONTHLY:
+                last_day = calendar.monthrange(
+                    self.start_date.year,
+                    self.start_date.month,
+                )[1]
+
+                expected_end = self.start_date.replace(
+                    day=last_day
+                )
+
+                if (
+                    self.start_date.day != 1
+                    or self.end_date != expected_end
+                ):
+                    errors["end_date"] = (
+                        "Monthly reports must cover the complete "
+                        "calendar month."
+                    )
+
+        if errors:
+            raise ValidationError(errors)
 
     def __str__(self):
         return (

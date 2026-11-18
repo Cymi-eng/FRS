@@ -41,9 +41,15 @@ class NotificationAPITests(APITestCase):
         self.list_url = reverse("notification-list")
         self.count_url = reverse("notification-unread-count")
         self.mark_all_url = reverse("notification-mark-all-read")
+
         self.mark_url = reverse(
             "notification-mark-read",
             kwargs={"notification_id": self.notification.id},
+        )
+
+        self.delete_url = reverse(
+            "notification-delete",
+            kwargs={"pk": self.notification.id},
         )
 
         self.client.force_authenticate(user=self.user)
@@ -123,6 +129,39 @@ class NotificationAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 0)
+
+    def test_user_can_delete_own_notification(self):
+        response = self.client.delete(self.delete_url)
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+
+        self.assertFalse(
+            Notification.objects.filter(
+                id=self.notification.id
+            ).exists()
+        )
+
+    def test_user_cannot_delete_another_users_notification(self):
+        url = reverse(
+            "notification-delete",
+            kwargs={"pk": self.other_notification.id},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        self.assertTrue(
+            Notification.objects.filter(
+                id=self.other_notification.id
+            ).exists()
+        )
 
     def test_notifications_require_authentication(self):
         self.client.force_authenticate(user=None)
